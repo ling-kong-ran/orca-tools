@@ -1,3 +1,4 @@
+// Test harness for the download engine HTTP checks. Toolkit production routes live in ../../server.cjs.
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {DownloadManager}=require('./engine.cjs');

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-24 — Orca Toolkit 1.0.0
+
+- 合并为一个 Orca Toolkit 插件，内部分 Accounts、Downloads、GPU 模块。
+- 增加 18774 统一管理页与模块设置，下载页面合入同一服务。
+- 下载记录与断点保留原目录，旧设置可迁移；远程目标变更前检查未完成任务与未清理访问。
+- 故障模块不阻止整个工具集启动；登录助手只激活 Toolkit。
+- 后台账号服务、GPU 服务及远程 MCP 继续独立运行，保留既有隔离与凭据边界。
+
 ## 2026-10-24 — 仓库首版
 
 - 整理 Account Switcher、Parallel Downloads、GPU Workflows、Local GPU Bridge 与自启助手源码。

@@ -96,11 +96,11 @@ python3 scripts/install-vps-gpu.py --client-config ~/gpu-client.local.json \
 
 安装后删除 VPS 上临时中转的 `~/gpu-client.local.json`（最终0600配置仍保留）；新账号加入后同样安装。对正在运行的 Claude 执行一次 `/reload-plugins`，然后 `/mcp` 检查 `local-gpu`、`godot-local`、`blender-local` 连接。
 
-## 6. Orca 入口插件
+## 6. 统一 Orca Toolkit 插件
 
-在 Windows Orca 设置 → Plugins 导入 `plugins/gpu-workflows`，审核并启用。也可尝试 `node plugins/gpu-workflows/Install.cjs`；内部安装器不兼容时使用 UI 导入。
+在 Windows Orca 设置 → Plugins 导入 `plugins/toolkit`，审核并启用。也可尝试 `node plugins/toolkit/Install.cjs`；内部安装器不兼容时使用 UI 导入。
 
-命令面板 **GPU Workflows: Open Manager** 或 **Ctrl+Alt+G** 打开管理页。该插件读取本机生成的 `launcher.json`，后台桥接未运行时用对应 Python 启动。它不是远程 MCP 本体，必须先完成前面的服务安装。
+命令面板 **Toolkit: GPU Workflows** 或 **Ctrl+Alt+G** 打开管理页。Toolkit 的 GPU 模块读取本机生成的 `launcher.json`，后台桥接未运行时用对应 Python 启动。它不是远程 MCP 本体，必须先完成前面的服务安装。
 
 ## 7. 验收与使用
 

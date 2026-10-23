@@ -4,7 +4,7 @@
 
 Windows GPU 安装器创建 `Local GPU Bridge.vbs` 登录启动项，使用安装时的 `pythonw.exe` 隐藏启动服务。它在 **Windows 用户登录后**运行，不是无人登录时的系统服务。Tailscale 应使用自动启动的 Windows 服务；ComfyUI 需用其自身方式启动。
 
-Orca 入口插件按命令激活。要在 Orca 打开后自动激活 GPU/下载工具，审核启用插件后执行：
+Orca 入口插件按命令激活。要在 Orca 打开后自动激活 Toolkit，审核启用插件后执行：
 
 ```powershell
 node tools/orca-startup/install.cjs
@@ -37,11 +37,11 @@ if ($bridgeProcess -and $bridgeProcess.CommandLine -like '*LocalGpuBridge*app*br
 4. 在仓库执行 `git pull`，检查部署说明是否有迁移事项；确认 `gpu-settings.local.json` 仍符合当前管理页配置，再运行安装器。安装器保留旧 token、备份旧 config，重建设置文件中的配置；**管理页改过的项目/目录需先同步到 settings 文件**，避免被旧设置覆盖。
 5. 重新安装远程 MCP（对每个 Claude profile 执行），在旧会话运行 `/reload-plugins`。不能只更新本机入口插件而不更新 VPS 客户端。
 
-本仓库的通用安装器生成 `launcher.json`。此前只按个人路径手工安装的版本，应执行此迁移后再升级到新的 GPU Workflows 入口，否则旧服务虽然在线，离线自动拉起时可能找不到 Python 配置。
+本仓库的通用安装器生成 `launcher.json`。此前只按个人路径手工安装的版本，应执行此迁移后再升级到新的 Toolkit GPU 入口，否则旧服务虽然在线，离线自动拉起时可能找不到 Python 配置。
 
 ### Orca 插件
 
-重新导入相应插件目录并按 Orca 提示审核。下载插件升级前先暂停任务；任务断点保存在运行目录，不在源码目录。新配置保留于 `%LOCALAPPDATA%\OrcaParallelDownloads\settings.json`。
+重新导入相应插件目录并按 Orca 提示审核。升级 Toolkit 前先暂停下载任务；任务断点保存在原 OrcaParallelDownloads 运行目录，统一设置保存在 `%LOCALAPPDATA%\OrcaTools\settings.json`。旧独立插件迁移见 [toolkit.md](toolkit.md)。
 
 ### 自启助手
 
@@ -84,7 +84,7 @@ Git 更新每次先备份，再将**受跟踪文件**重置为配置的远端分
 
 ## 停用与移除
 
-1. Orca 设置中禁用/移除 GPU Workflows 与 Parallel Downloads；移除 Windows Startup 目录的 `Local GPU Bridge.vbs`、`Orca Local Tools.vbs`，按上述方法核对并停止对应 PID。
+1. Orca 设置中禁用/移除 Orca Toolkit；移除 Windows Startup 目录的 `Local GPU Bridge.vbs`、`Orca Local Tools.vbs`，按上述方法核对并停止对应 PID。
 2. 完成任务后备份运行数据，再自行移除 LocalGpuBridge/OrcaLocalTools 目录；下载未完成前不要删断点或密钥。
 3. VPS `claude plugin uninstall local-gpu@local-gpu-tools --scope user`（各 profile 分别设置 CLAUDE_CONFIG_DIR），面板用 `systemctl --user disable --now claude-account-panel.service`。
 4. 若不再使用渲染隔离，由管理员查看并只移除 `LocalGpuBridge-*` 规则。专用 exe 是安装器创建的副本，可在不运行时删除；不要删除原渲染器。

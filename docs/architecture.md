@@ -1,15 +1,16 @@
 # 架构、权限与隐私边界
 
 ```text
-Windows Orca
-  ├─ GPU Workflows 入口 ── localhost:18773 管理页
+Windows Orca：仅安装 Orca Toolkit
+  └─ localhost:18774 统一管理页
+       ├─ GPU 模块 ── localhost:18773 管理页
   │                         └─ Local GPU Bridge
   │                              ├─ localhost:8188 ComfyUI
   │                              ├─ 专用 Godot / Blender
   │                              └─ Git 渲染副本
-  ├─ Parallel Downloads ── localhost:18770 管理页
+       ├─ Downloads 模块 ── 同服务 /downloads/ 页面
   │         └─ Tailscale + SSH ── Linux 只读分块 reader
-  └─ 远程浏览器 / SSH 转发 ── VPS localhost:18766 账号面板
+       └─ Accounts 模块 / 远程浏览器 ── VPS localhost:18766 账号面板
                                      └─ 该 Linux 用户的 Orca runtime RPC
 
 Linux VPS Claude Code

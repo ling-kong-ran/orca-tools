@@ -1,0 +1,26 @@
+{
+  "manifestVersion": 1,
+  "id": "toolkit",
+  "publisher": "local-tools",
+  "name": "Orca Toolkit",
+  "version": "1.0.0",
+  "description": "One control center for remote Claude accounts, parallel downloads and local GPU workflows. Independent modules, shared configuration and startup.",
+  "engines": {"orca": ">=1.4.237"},
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "capabilities": [{"kind": "notifications:show"}],
+  "contributes": {
+    "commands": [
+      {"id":"toolkit.open","title":"Toolkit: Open Manager","context":"global"},
+      {"id":"toolkit.accounts","title":"Toolkit: Remote Accounts","context":"global"},
+      {"id":"toolkit.downloads","title":"Toolkit: Downloads","context":"global"},
+      {"id":"toolkit.gpu","title":"Toolkit: GPU Workflows","context":"global"},
+      {"id":"toolkit.pause-downloads","title":"Toolkit: Pause All Downloads","context":"global"}
+    ],
+    "keybindings": [
+      {"command":"toolkit.open","key":"Ctrl+Alt+T","when":"global"},
+      {"command":"toolkit.downloads","key":"Ctrl+Alt+D","when":"global"},
+      {"command":"toolkit.gpu","key":"Ctrl+Alt+G","when":"global"}
+    ]
+  }
+}

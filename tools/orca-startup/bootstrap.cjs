@@ -7,8 +7,7 @@ try{const pid=Number(fs.readFileSync(lock,'utf8'));if(pid>0){try{process.kill(pi
 fs.writeFileSync(lock,String(process.pid));
 process.on('exit',()=>{try{if(fs.readFileSync(lock,'utf8')===String(process.pid))fs.unlinkSync(lock);}catch{}});
 const reviewed={
- 'local-tools.gpu-workflows':{command:'gpu-workflows.open',port:18773},
- 'local-tools.parallel-download':{command:'parallel-download.open',port:18770}
+ 'local-tools.toolkit':{command:'toolkit.open',port:18774}
 };
 let client,lastState='',activated=new Set();
 function log(state){const text=JSON.stringify(state);if(text===lastState)return;lastState=text;fs.appendFileSync(path.join(root,'startup.log'),new Date().toISOString()+' '+text+'\n');}

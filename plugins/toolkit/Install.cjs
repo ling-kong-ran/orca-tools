@@ -11,5 +11,5 @@ const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_pro
  const result=await installer.gr({pluginsDir:installer.Fr(path.join(process.env.APPDATA,'orca')),sourcePath:__dirname,hostVersion});
  console.log(JSON.stringify(result));
  if(!result.ok)process.exitCode=1;
- else console.log('Installed. Review and enable Parallel Downloads in Orca Settings → Plugins.');
+ else console.log('Installed. Review and enable Orca Toolkit in Orca Settings → Plugins.');
 })().catch(error=>{console.error(error.message);process.exitCode=1;});

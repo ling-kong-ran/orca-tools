@@ -24,6 +24,8 @@ sudo loginctl enable-linger "$USER"
 
 ## 2. 从本机打开
 
+推荐：在 Orca Toolkit 管理页配置 Accounts 的远程 environment（worktree 可选），点击 **Open accounts**。账号仍在远程面板中切换，邮箱继续遮罩。Toolkit 安装见 [统一插件部署](toolkit.md)。
+
 **优先在 Orca 的该远程服务器浏览器中打开** `http://127.0.0.1:18766/`。这里的回环地址必须属于 VPS。
 
 Windows 快捷脚本也可调用 Orca CLI 打开远程浏览器页：

@@ -4,31 +4,35 @@
 
 项目是独立的社区工具，使用 Orca 的本地运行时接口；不是 Orca 官方插件库。部分接口依赖 Orca 版本，升级后应先运行检查。仓库只保存源码、示例配置和部署文档，不保存登录态、密钥、真实连接配置或项目素材。
 
-## 工具目录
+## 一个插件，三个业务模块
 
-| 工具 | 用途 | 运行位置 | 部署说明 |
+在 Orca 中只需安装 [Orca Toolkit](plugins/toolkit/)，用 **Ctrl+Alt+T** 打开统一管理页 `http://127.0.0.1:18774/`。
+
+| 模块 | 职责 | 管理方式 | 部署说明 |
 | --- | --- | --- | --- |
-| [Account Switcher](tools/account-switcher/) | 切换远程 Orca 管理的 Claude 账号，显示额度与重置时间，遮罩邮箱 | Linux VPS；本机通过 Orca 远程浏览器打开 | [账号工具部署](docs/account-switcher.md) |
-| [Parallel Downloads](plugins/parallel-download/) | 并行分块下载、暂停续传、重试、SHA-256 校验 | Windows Orca 插件 + 临时远程只读 SSH reader | [下载插件部署](docs/parallel-download.md) |
-| [GPU Workflows](plugins/gpu-workflows/) | 从 Orca 打开本机 GPU 管理页，必要时启动桥接服务 | Windows Orca 插件 | [GPU 全套部署](docs/gpu-bridge.md) |
-| [Local GPU Bridge](services/local-gpu-bridge/) | ComfyUI 工作流、Godot GPU 截图/GDScript、Blender 操作/Python、Git 渲染副本更新 | Windows 服务 + Linux Claude Code MCP 插件 | [GPU 全套部署](docs/gpu-bridge.md) |
-| [Orca Startup](tools/orca-startup/) | 登录 Windows 后等待 Orca，自动激活已审核启用的插件 | Windows 后台助手 | [自启、升级与移除](docs/operations.md) |
+| Accounts | 切换远程 Claude 账号、查看用量与重置时间 | Toolkit 配置连接并打开远程账号面板 | [账号部署](docs/account-switcher.md) |
+| Downloads | 并行下载、暂停续传、重试、SHA-256 校验 | Toolkit 内的下载页面；Ctrl+Alt+D | [下载模块](docs/parallel-download.md) |
+| GPU | ComfyUI、Godot、Blender、Git 渲染副本 | Toolkit 查看在线状态并打开本机 GPU 管理页；Ctrl+Alt+G | [GPU 部署](docs/gpu-bridge.md) |
 
-## 先部署哪个
+Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号面板留在 VPS，GPU 服务留在 Windows，Claude MCP 插件留在 VPS；它们不是额外需要安装的 Orca UI 插件。模块各自执行任务，单个模块未配置不影响其余模块。
 
-- 只需要切账号：按 [账号部署](docs/account-switcher.md) 操作，不需要 GPU 服务。
-- 下载大文件经常停住：按 [下载部署](docs/parallel-download.md) 操作，不需要 GPU 服务。
-- 让远程 Claude 用本机 GPU：按 [GPU 部署](docs/gpu-bridge.md) 顺序安装 Windows 服务、远程 MCP、Orca 入口插件。
-- 希望登录后自动恢复：最后安装 [自启助手](docs/operations.md)。防火墙规则持久保存，不需要每次重启重新执行。
+首次安装和旧独立插件迁移先看 **[Toolkit 部署与迁移](docs/toolkit.md)**。不再同时启用旧 GPU Workflows / Parallel Downloads 插件。
+
+## 后台组件
+
+- [账号面板](tools/account-switcher/)：Linux 普通用户服务，不包含账号凭据。
+- [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
+- [登录助手](tools/orca-startup/)：等待 Orca 打开，自动激活用户已审核启用的 Toolkit。
+- [运维说明](docs/operations.md)：自启、备份、升级和移除。
 
 ## 环境与兼容性
 
 - Windows 10/11；Linux VPS（systemd 用户服务用于账号面板）。
-- Orca 桌面及远程运行时已连接。GPU 入口要求 Orca `>=1.4.237`；下载插件 `>=1.4.229`。内部 RPC、安装器和 CLI 命令可能随版本变化。
+- Orca 桌面及远程运行时已连接。Toolkit 要求 Orca `>=1.4.237`。内部 RPC、安装器和 CLI 命令可能随版本变化。
 - Windows Python **3.10+**、Node.js **18+**、Git；Linux Python **3.10+**，GPU MCP 另需已登录的 Claude Code。
 - 本机与 VPS 已登录同一个获授权的 Tailscale 网络。服务绑定私网/回环，不开公网端口。
 - GPU 功能还需本机 ComfyUI/Godot/Blender；工具不会自动下载模型、渲染器或运行不明安装包。
-- 仓库整理版本：Local GPU Bridge **1.4.0**、GPU Workflows **1.0.1**、Parallel Downloads **1.0.3**。后两者加入可迁移配置，区别于原机器安装版。
+- 当前版本：Orca Toolkit **1.0.0**、Local GPU Bridge/MCP **1.4.0**。旧独立插件已合并为 Toolkit 内部模块。
 
 ## 数据与执行边界
 
@@ -47,8 +51,8 @@ python tools/account-switcher/test_panel.py
 Push-Location services/local-gpu-bridge
 python -m unittest test_bridge test_workflow_library test_native_control test_native_git -v
 Pop-Location
-node --test plugins/parallel-download/test.cjs plugins/parallel-download/test-settings.cjs
-python plugins/parallel-download/test_remote.py
+node --test plugins/toolkit/test.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
+python plugins/toolkit/modules/downloads/test_remote.py
 ```
 
 测试使用临时目录、临时 Git 仓库和模拟渲染器，不调用真实账号或公网模型服务。测试不代表目标电脑的显卡驱动、模型和防火墙已经就绪，首次部署仍需按文档执行验收。
