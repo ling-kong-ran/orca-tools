@@ -17,6 +17,21 @@ class Adapter:
  def request(self,*args,**kwargs):return SCHEMAS
  def submit(self,prompt,client_id):self.prompt=prompt;return 'test-prompt-id'
 class Tests(unittest.TestCase):
+ def test_tts_language_speaker_and_instruction_exposed_without_model_or_device(self):
+  fields={'text':['STRING',{}],'language':[['Auto','Chinese','English','Japanese']],
+          'speaker':[['Serena','Ryan']],'instruct':['STRING',{}],
+          'custom_model_path':['STRING',{}],'device':[['cuda','cpu']]}
+  schemas={'FB_Qwen3TTSCustomVoice':{'input':{'required':fields}}}
+  prompt={'1':{'class_type':'FB_Qwen3TTSCustomVoice','inputs':{'text':'Hello','language':'Chinese','speaker':'Serena',
+          'instruct':'Natural narration','custom_model_path':'C:/private/model','device':'cuda'}}}
+  params=exposed_parameters(prompt,schemas)
+  self.assertEqual(set(params),{'text_1','language_1','speaker_1','instruct_1'})
+  self.assertEqual(params['language_1']['enum'],['Auto','Chinese','English','Japanese'])
+  self.assertEqual(params['speaker_1']['enum'],['Serena','Ryan'])
+  changed=apply_parameters({'prompt':prompt,'parameters':params},{'language_1':'English','speaker_1':'Ryan','instruct_1':'Speak clearly.'})
+  self.assertEqual(changed['1']['inputs']['language'],'English')
+  self.assertEqual(changed['1']['inputs']['device'],'cuda')
+  with self.assertRaisesRegex(ValueError,'Invalid option'):apply_parameters({'prompt':prompt,'parameters':params},{'language_1':'unsupported'})
  def test_widget_order_controls_and_private_inputs(self):
   prompt,seeds=editor_to_prompt(workflow(),SCHEMAS)
   self.assertEqual(prompt['1']['inputs'],{'text':'hello','seed':42,'device':'cuda'})

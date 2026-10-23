@@ -22,6 +22,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 
 - [账号面板](tools/account-switcher/)：Linux 普通用户服务，不包含账号凭据。
 - [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
+- [多语言配音](docs/tts.md)：Qwen3 TTS 的中英文及其他语言参数、音色与排错。
 - [登录助手](tools/orca-startup/)：等待 Orca 打开，自动激活用户已审核启用的 Toolkit。
 - [运维说明](docs/operations.md)：自启、备份、升级和移除。
 
@@ -49,7 +50,7 @@ python scripts/check.py
 python scripts/test_install.py
 python tools/account-switcher/test_panel.py
 Push-Location services/local-gpu-bridge
-python -m unittest test_bridge test_workflow_library test_native_control test_native_git -v
+python -m unittest discover -p 'test_*.py' -v
 Pop-Location
 node --test plugins/toolkit/test.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
 python plugins/toolkit/modules/downloads/test_remote.py

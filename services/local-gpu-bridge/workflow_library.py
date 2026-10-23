@@ -149,12 +149,15 @@ def exposed_parameters(prompt, schemas):
         fields = input_schema(schemas.get(node['class_type'],{}))
         for name,value in node['inputs'].items():
             if type(value) not in (str,int,float,bool): continue
+            tts = node['class_type'].startswith('FB_Qwen3TTS')
+            tts_text = tts and name in ('instruct','target_text')
+            tts_choice = tts and name in ('language','speaker')
             asset = name in ASSET_FIELDS and node['class_type'].startswith(('Load','VHS_Load'))
             if not asset and PRIVATE_FIELDS.search(name): continue
-            if isinstance(value,str) and name not in TEXT_FIELDS and name not in ('sampler_name','scheduler') and not asset: continue
+            if isinstance(value,str) and name not in TEXT_FIELDS and name not in ('sampler_name','scheduler') and not asset and not tts_text and not tts_choice: continue
             spec = {'node':node_id,'input':name,'type':{str:'string',int:'integer',float:'number',bool:'boolean'}[type(value)]}
             definition = fields.get(name,[]); options = definition[1] if len(definition)>1 and isinstance(definition[1],dict) else {}
-            if isinstance(value,str): spec['maxLength'] = 32000 if name in TEXT_FIELDS else 300
+            if isinstance(value,str): spec['maxLength'] = 32000 if name in TEXT_FIELDS or tts_text else 300
             if asset: spec['asset'] = True
             if type(value) in (int,float):
                 for source,target in (('min','minimum'),('max','maximum')):
@@ -162,7 +165,7 @@ def exposed_parameters(prompt, schemas):
                 if 'seed' in name: spec.update(minimum=0,maximum=min(spec.get('maximum',2**53-1),2**53-1))
                 if name=='batch_size':spec['maximum']=min(spec.get('maximum',8),8)
                 if name=='steps':spec['maximum']=min(spec.get('maximum',150),150)
-            if name in ('sampler_name','scheduler') and definition:
+            if (name in ('sampler_name','scheduler') or tts_choice) and definition:
                 choices=definition[0] if isinstance(definition[0],list) else options.get('options')
                 if choices: spec['enum'] = choices
             alias = re.sub('[^a-z0-9_-]','_',name.lower()+'_'+node_id.lower())[:64]

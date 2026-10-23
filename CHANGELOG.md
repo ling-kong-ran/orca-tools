@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-24 — GPU Bridge 配音修复
+
+- Qwen3 TTS 开放语言、预设音色与朗读风格参数；语言/音色使用节点 enum 验证，保留设备与模型路径过滤。
+- 增加跨进程单实例锁并关闭 Windows HTTP 端口复用，避免重复启动导致管理页和私网接口版本不一致。
+- 修复任务恰好在 history/queue 两次查询之间完成时被误判 unknown 的竞争窗口。
+- 增加中文/英文调用说明、参数测试、单实例及完成状态竞争测试。
+
 ## 2026-10-24 — Orca Toolkit 1.0.0
 
 - 合并为一个 Orca Toolkit 插件，内部分 Accounts、Downloads、GPU 模块。

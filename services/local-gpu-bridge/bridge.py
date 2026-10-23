@@ -8,6 +8,29 @@ from native_control import NativeControl
 SLUG = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 HEX = re.compile(r'^[a-f0-9]{32}$')
 MAX_BODY = 48 * 1024 * 1024
+_INSTANCE_LOCK = None
+
+
+def acquire_instance_lock(root):
+    """Keep one bridge per data directory, including concurrent Windows launches."""
+    global _INSTANCE_LOCK
+    handle = (pathlib.Path(root) / 'instance.lock').open('a+b')
+    try:
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write(b'0'); handle.flush()
+        handle.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise RuntimeError('Local GPU Bridge is already running.') from None
+    _INSTANCE_LOCK = handle
+    return handle
 
 def atomic_json(file, value):
     file.parent.mkdir(parents=True, exist_ok=True)
@@ -87,8 +110,7 @@ class ComfyAdapter:
         result = self.request('/prompt', {'prompt': prompt, 'client_id': client_id})
         if not isinstance(result.get('prompt_id'), str): raise ValueError('ComfyUI did not return a prompt id.')
         return result['prompt_id']
-    def inspect(self, prompt_id):
-        history = self.request('/history/' + urllib.parse.quote(prompt_id, safe=''))
+    def history_status(self, history, prompt_id):
         if prompt_id in history:
             item = history[prompt_id]; status = item.get('status', {})
             if status.get('status_str') == 'error':
@@ -108,10 +130,18 @@ class ComfyAdapter:
                         for child in value: visit(child)
                 visit(item.get('outputs', {}))
                 return {'status': 'succeeded', 'artifacts': artifacts}
+        return None
+    def inspect(self, prompt_id):
+        history_route = '/history/' + urllib.parse.quote(prompt_id, safe='')
+        result = self.history_status(self.request(history_route), prompt_id)
+        if result: return result
         queue = self.request('/queue')
         for kind, state in [('queue_running', 'running'), ('queue_pending', 'queued')]:
             if any(len(entry) > 1 and entry[1] == prompt_id for entry in queue.get(kind, [])):
                 return {'status': state}
+        # Completion can land between the history request and the queue request.
+        result = self.history_status(self.request(history_route), prompt_id)
+        if result: return result
         return {'status': 'unknown', 'message': 'No queue/history entry. The backend may have restarted; do not blindly resubmit.'}
     def cancel_pending(self, prompt_id):
         queue = self.request('/queue')
@@ -327,6 +357,7 @@ def make_handler(bridge):
 
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = os.name != 'nt'
     def handle_error(self, request, client_address): logging.error('Client connection ended unexpectedly')
 
 def main():
@@ -337,6 +368,7 @@ def main():
     if ipaddress.ip_address(config['listen']) not in ipaddress.ip_network('100.64.0.0/10') and config['listen'] != '127.0.0.1': raise ValueError('Only loopback or Tailscale listen addresses are supported.')
     if len(config['token']) < 32: raise ValueError('Bridge token must have at least 32 characters.')
     root = pathlib.Path(config['data_dir']); root.mkdir(parents=True, exist_ok=True)
+    acquire_instance_lock(root)
     handler = logging.handlers.RotatingFileHandler(root/'bridge.log', maxBytes=1024*1024, backupCount=2, encoding='utf-8')
     logging.basicConfig(level=logging.INFO, handlers=[handler], format='%(asctime)s %(levelname)s %(message)s')
     # At login Tailscale may not have its address yet. Retry binding without changing VPN settings.
