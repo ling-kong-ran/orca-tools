@@ -2,7 +2,16 @@
 
 这个工具读取 **运行它的 Linux 用户的 Orca 账号列表**，不是读取本机 Windows 的账号。账号必须先通过 Orca/Claude 正常登录。面板用 Orca RPC 切换账号，不复制或显示 OAuth token。
 
-## 1. 在 VPS 安装
+## 推荐：直接使用本机 Toolkit
+
+1. 安装 Orca Toolkit 1.1.0+，确保 Orca 已连接目标远程环境。
+2. 在 `http://127.0.0.1:18774/` 的 Module settings 中填写 Accounts 的 Orca environment，保存。
+3. 点击 **Manage accounts**，本机进入 `/accounts/`，查看遮罩邮箱、用量和重置时间。
+4. 点击 **Use this account**，等待 Selected；之后在远程项目中新建 Claude 会话。
+
+此方式通过已有的 Orca 配对连接调用固定 accounts RPC，不需要远程 worktree、另开浏览器标签、额外 SSH 隧道或安装下面的旧面板。账号必须已在远程用户的 Orca 中登录；本机账号和远程账号是不同列表。首次加载显示已有用量缓存，Refresh usage 主动更新；缺失数据保持 Unknown。
+
+## 可选旧面板：在 VPS 安装
 
 在拥有 Orca 远程运行时的普通用户终端中克隆本仓库，进入根目录；不要用 root 安装面板。
 
@@ -24,9 +33,9 @@ sudo loginctl enable-linger "$USER"
 
 ## 2. 从本机打开
 
-推荐：在 Orca Toolkit 管理页配置 Accounts 的远程 environment（worktree 可选），点击 **Open accounts**。账号仍在远程面板中切换，邮箱继续遮罩。Toolkit 安装见 [统一插件部署](toolkit.md)。
+以下仅适用于单独部署旧 VPS 面板。新版 Toolkit 的本机账号页见上文及 [统一插件部署](toolkit.md)。
 
-**优先在 Orca 的该远程服务器浏览器中打开** `http://127.0.0.1:18766/`。这里的回环地址必须属于 VPS。
+旧面板可在 Orca 的该远程服务器浏览器中打开 `http://127.0.0.1:18766/`。这里的回环地址必须属于 VPS。
 
 Windows 快捷脚本也可调用 Orca CLI 打开远程浏览器页：
 

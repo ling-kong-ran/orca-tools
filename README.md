@@ -10,17 +10,17 @@
 
 | 模块 | 职责 | 管理方式 | 部署说明 |
 | --- | --- | --- | --- |
-| Accounts | 切换远程 Claude 账号、查看用量与重置时间 | Toolkit 配置连接并打开远程账号面板 | [账号部署](docs/account-switcher.md) |
+| Accounts | 切换远程 Claude 账号、查看用量与重置时间 | Toolkit 本机账号页，通过已有远程连接切换 | [账号部署](docs/account-switcher.md) |
 | Downloads | 并行下载、暂停续传、重试、SHA-256 校验 | Toolkit 内的下载页面；Ctrl+Alt+D | [下载模块](docs/parallel-download.md) |
 | GPU | ComfyUI、Godot、Blender、Git 渲染副本 | Toolkit 查看在线状态并打开本机 GPU 管理页；Ctrl+Alt+G | [GPU 部署](docs/gpu-bridge.md) |
 
-Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号面板留在 VPS，GPU 服务留在 Windows，Claude MCP 插件留在 VPS；它们不是额外需要安装的 Orca UI 插件。模块各自执行任务，单个模块未配置不影响其余模块。
+Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号凭据留在 VPS，GPU 服务留在 Windows，Claude MCP 插件留在 VPS；它们不是额外需要安装的 Orca UI 插件。模块各自执行任务，单个模块未配置不影响其余模块。
 
 首次安装和旧独立插件迁移先看 **[Toolkit 部署与迁移](docs/toolkit.md)**。不再同时启用旧 GPU Workflows / Parallel Downloads 插件。
 
 ## 后台组件
 
-- [账号面板](tools/account-switcher/)：Linux 普通用户服务，不包含账号凭据。
+- [可选旧账号面板/CLI](tools/account-switcher/)：Linux 普通用户服务；新版 Toolkit 直接调用远程 RPC，无需部署该面板。
 - [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
 - [多语言配音](docs/tts.md)：Qwen3 TTS 的中英文及其他语言参数、音色与排错。
 - [登录助手](tools/orca-startup/)：等待 Orca 打开，自动激活用户已审核启用的 Toolkit。
@@ -33,7 +33,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 - Windows Python **3.10+**、Node.js **18+**、Git；Linux Python **3.10+**，GPU MCP 另需已登录的 Claude Code。
 - 本机与 VPS 已登录同一个获授权的 Tailscale 网络。服务绑定私网/回环，不开公网端口。
 - GPU 功能还需本机 ComfyUI/Godot/Blender；工具不会自动下载模型、渲染器或运行不明安装包。
-- 当前版本：Orca Toolkit **1.0.1**、Local GPU Bridge/MCP **1.4.0**。旧独立插件已合并为 Toolkit 内部模块。
+- 当前版本：Orca Toolkit **1.1.0**、Local GPU Bridge/MCP **1.4.0**。旧独立插件已合并为 Toolkit 内部模块。
 
 ## 数据与执行边界
 
@@ -52,7 +52,7 @@ python tools/account-switcher/test_panel.py
 Push-Location services/local-gpu-bridge
 python -m unittest discover -p 'test_*.py' -v
 Pop-Location
-node --test plugins/toolkit/test.cjs plugins/toolkit/test-directory-picker.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
+node --test plugins/toolkit/test.cjs plugins/toolkit/test-accounts.cjs plugins/toolkit/test-directory-picker.cjs plugins/toolkit/test-remote-browser.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
 python plugins/toolkit/modules/downloads/test_remote.py
 ```
 

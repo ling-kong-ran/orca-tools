@@ -51,7 +51,10 @@ class Controller {
   }};
  }
  requireDownloads(){if(!this.downloads||!this.settings.downloads.enabled)throw Error(this.downloadError||'Downloads module is disabled.');return this.downloads;}
- async openAccounts(){if(!this.settings.accounts.enabled)throw Error('Accounts module is disabled.');return this.accounts.open(this.settings.accounts);}
+ requireAccounts(){if(!this.settings.accounts.enabled)throw Error('Accounts module is disabled.');return this.settings.accounts;}
+ async openAccounts(){this.requireAccounts();return {opened:true,url:'/accounts/'};}
+ async accountState(refreshUsage=false){const settings=this.requireAccounts();const state=await this.accounts.list(settings,refreshUsage);if(this.settings.accounts!==settings)throw Error('Remote connection changed. Refresh accounts.');return state;}
+ async selectAccount(body){const settings=this.requireAccounts();return this.accounts.select(settings,body,()=>this.settings.accounts===settings&&settings.enabled);}
  async openGpu(){if(!this.settings.gpu.enabled)throw Error('GPU module is disabled.');return this.gpu.open();}
  async close(){if(this.loading)await this.loading.catch(()=>{});if(this.downloads)await this.downloads.close();}
 }

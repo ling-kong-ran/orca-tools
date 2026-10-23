@@ -10,8 +10,8 @@ Windows Orca：仅安装 Orca Toolkit
   │                              └─ Git 渲染副本
        ├─ Downloads 模块 ── 同服务 /downloads/ 页面
   │         └─ Tailscale + SSH ── Linux 只读分块 reader
-       └─ Accounts 模块 / 远程浏览器 ── VPS localhost:18766 账号面板
-                                     └─ 该 Linux 用户的 Orca runtime RPC
+       └─ Accounts 模块 /accounts/ ── 已配对 Orca 远程 RPC
+                                     └─ 该 Linux 用户的账号列表与选择
 
 Linux VPS Claude Code
   └─ local-gpu / godot-local / blender-local MCP
@@ -22,7 +22,7 @@ Linux VPS Claude Code
 
 Tailscale 负责两台设备之间的加密隧道；Bridge 另外检查请求来源私网 IP 和 token。HTTP 在 Tailscale 隧道内使用，不代表对任意来源开放。本机管理页只绑定127.0.0.1，校验 Host、Origin 和会话 nonce/token，不向远程 MCP 暴露批准工作流、登记项目或修改执行器的接口。
 
-账号工具只访问同一 Linux 用户已有 Orca runtime 元数据和 Unix socket。网页遮罩邮箱，CLI 为交互选择显示邮箱；没有 OAuth 导出接口。运行时元数据本身是秘密，不能进入仓库。账号切换影响后续启动的会话，不能保证改变已运行进程。
+Toolkit 账号模块通过已有 Orca 配对连接访问远程 Linux 用户的账号 RPC，仅接受 list/select 操作；不使用本机 Windows 账号作为回退。可选旧面板访问同一 Linux 用户已有 runtime 元数据和 Unix socket。网页遮罩邮箱，CLI 为交互选择显示邮箱；没有 OAuth 导出接口。运行时元数据本身是秘密，不能进入仓库。账号切换影响后续启动的会话，不能保证改变已运行进程。
 
 ## 避免将公网端点与硬件信息返回给远程 Claude
 

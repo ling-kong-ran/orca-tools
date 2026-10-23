@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-24 — Orca Toolkit 1.1.0
+
+- Accounts 改为本机内置页面，直接通过已配对 Orca 连接列出和选择远程账号，保留邮箱遮罩、用量与重置倒计时。
+- 不再依赖远程浏览器页、worktree 或单独的 VPS 账号面板；切换校验当前选择、连接和结果，已有 Claude 会话保持原账号。
+- Downloads 增加远程目录/文件选择器、筛选和隐藏文件选项，按远程环境记住上次目录及文件地址。
+- 继续沿用一个插件、回环管理 API、Host/Origin/token 校验；远程浏览仅使用固定只读 RPC。
+
 ## 2026-10-24 — Orca Toolkit 1.0.1
 
 - Downloads 增加 Browse 文件夹选择按钮，保留手动输入路径。

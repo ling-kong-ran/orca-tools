@@ -17,7 +17,7 @@ Downloads 已合并到 **Orca Toolkit**，不再单独安装 Parallel Downloads 
 
 ## 3. 下载
 
-点击 **Manage downloads**，或按 **Ctrl+Alt+D**，进入同一 Toolkit 的 `/downloads/` 页面。输入远程文件绝对路径；保存目录旁的 **Browse…** 按钮打开 Windows 文件夹选择框，也可手动填写路径。取消选择保持原目录；上次选择的目录或成功创建下载任务时使用的目录会保存在本机，下次自动恢复。然后选择并行数。先用4路，网络不稳时减到2路。多路不会突破链路带宽上限。
+点击 **Manage downloads**，或按 **Ctrl+Alt+D**，进入同一 Toolkit 的 `/downloads/` 页面。点击 **Browse remote…** 浏览服务器目录并选文件，支持上级、主目录、隐藏文件和名称筛选，也可输入远程文件绝对路径。记住每个远程 environment 上次的目录与文件地址；保存目录旁的 **Browse…** 按钮打开 Windows 文件夹选择框，也可手动填写路径。取消选择保持原目录；上次选择的目录或成功创建下载任务时使用的目录会保存在本机，下次自动恢复。然后选择并行数。先用4路，网络不稳时减到2路。多路不会突破链路带宽上限。
 
 任务在关闭 Orca/禁用模块时暂停；重新打开后 Resume。最终文件生成前校验 SHA-256。源文件修改时拒绝续传，需新建任务。未完成任务或临时访问未清理时，不能切换到另一台下载服务器；先完成或取消并清理。
 
@@ -34,4 +34,6 @@ Downloads 已合并到 **Orca Toolkit**，不再单独安装 Parallel Downloads 
 
 旧 18770 下载页由 Toolkit 的 18774/downloads/ 替代；旧插件停用后旧页面断开是正常迁移结果。
 
-目录偏好位于 `%LOCALAPPDATA%/OrcaTools/downloads-preferences.json`，只在本机读取，不传给 VPS。原生选择框只通过固定的受认证本机接口调用；不开放任意 PowerShell 命令。
+本机保存目录与按服务器区分的远程地址偏好位于 `%LOCALAPPDATA%/OrcaTools/downloads-preferences.json`，只在本机读取，不传给 VPS。原生选择框只通过固定的受认证本机接口调用；不开放任意 PowerShell 命令。
+
+远程目录浏览通过已有配对 Orca 的只读 `files.browseServerDir` RPC，不新增 SSH 端口或通用 shell 接口。点击浏览不会下载文件，确认选择后仍需 Start download。

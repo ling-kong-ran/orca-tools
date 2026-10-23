@@ -13,7 +13,7 @@ export default async function activate(api) {
   };
   api.commands.register('toolkit.open',args=>open(service.url,args));
   api.commands.register('toolkit.downloads',args=>open(service.url+'downloads/',args));
-  api.commands.register('toolkit.accounts',()=>service.controller.openAccounts());
+  api.commands.register('toolkit.accounts',args=>open(service.url+'accounts/',args));
   api.commands.register('toolkit.gpu',async(args={})=>{const result=await service.controller.openGpu();return open(result.url,args);});
   api.commands.register('toolkit.pause-downloads',async()=>{await service.controller.downloads?.pauseAll();return {ok:true};});
   api.log('Orca Toolkit is ready. Ctrl+Alt+T opens the control center.');
