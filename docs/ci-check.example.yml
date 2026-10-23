@@ -18,5 +18,5 @@ jobs:
       - run: python tools/account-switcher/test_panel.py
       - run: python -m unittest discover -p 'test_*.py' -v
         working-directory: services/local-gpu-bridge
-      - run: node --test plugins/toolkit/test.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
+      - run: node --test plugins/toolkit/test.cjs plugins/toolkit/test-directory-picker.cjs plugins/toolkit/modules/downloads/test.cjs plugins/toolkit/modules/downloads/test-settings.cjs
       - run: python plugins/toolkit/modules/downloads/test_remote.py

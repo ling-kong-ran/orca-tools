@@ -14,7 +14,7 @@ Orca 里只保留一个 **Orca Toolkit** 插件；业务拆为 Accounts、Downlo
 ## 统一管理界面
 
 - **Accounts**：显示配置状态；Open accounts 在 Orca 的**远程浏览器**打开远程 localhost:18766 面板，保留邮箱遮罩、用量、重置时间和账号切换。显示 Configured 只代表已填连接，不代表账号服务已在线。原账号数据留在远程，Toolkit 不复制 OAuth 凭据。切换后新建远程Claude会话。
-- **Downloads**：同一18774服务的 `/downloads/` 页面，保留暂停/续传/校验；模块启停和目标配置统一管理。
+- **Downloads**：同一18774服务的 `/downloads/` 页面，支持 Windows 文件夹选择、目录记忆、暂停/续传/校验；模块启停和目标配置统一管理。
 - **GPU**：显示本机服务实际在线状态，打开原18773管理页；服务未启动时尝试按 launcher.json 拉起。渲染、工作流、Git设置仍由GPU服务管理。
 - **Module settings**：模块配置与启用状态。Accounts/GPU开关只控制 Toolkit 入口，不停止后台独立服务或远程正在执行的任务。Downloads关闭时暂停下载，开启后需手动恢复。
 

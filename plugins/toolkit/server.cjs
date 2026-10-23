@@ -1,8 +1,10 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {Controller}=require('./controller.cjs'),{launch}=require('./modules/downloads/runtime.cjs');
+const {DirectoryPicker}=require('./directory-picker.cjs'),preferences=require('./download-preferences.cjs');
 async function startServer(options){
  const controller=new Controller(options);await controller.initialize();const token=crypto.randomBytes(32).toString('hex');let port;
+ const picker=options.directoryPicker||new DirectoryPicker(options.runtime);
  const server=http.createServer(async(req,res)=>{
   const origin='http://127.0.0.1:'+port;
   const send=(code,body,type='application/json; charset=utf-8')=>{const bytes=Buffer.from(typeof body==='string'?body:JSON.stringify(body));res.writeHead(code,{'Content-Type':type,'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${token}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});res.end(bytes);};
@@ -16,7 +18,7 @@ async function startServer(options){
    }
    if(req.headers['x-toolkit-token']!==token&&req.headers['x-download-token']!==token)return send(403,{error:'Session changed. Reload this page.'});
    if(req.method==='GET'&&req.url==='/api/status')return send(200,await controller.status());
-   if(req.method==='GET'&&req.url==='/api/downloads/jobs')return send(200,{jobs:controller.requireDownloads().list(),defaultFolder:path.join(options.runtime.home,'Downloads','Orca')});
+   if(req.method==='GET'&&req.url==='/api/downloads/jobs')return send(200,{jobs:controller.requireDownloads().list(),defaultFolder:preferences.defaultFolder(options.dataDir,options.runtime.home)});
    if(req.method!=='POST')return send(404,{error:'Not found.'});
    if(req.headers.origin!==origin)return send(403,{error:'Invalid Origin.'});
    if(req.headers['content-type']?.split(';')[0]!=='application/json')return send(415,{error:'Expected JSON.'});
@@ -25,7 +27,16 @@ async function startServer(options){
    if(req.url==='/api/settings')return send(200,await controller.update(body));
    if(req.url==='/api/accounts/open')return send(200,await controller.openAccounts());
    if(req.url==='/api/gpu/open')return send(200,await controller.openGpu());
-   if(req.url==='/api/downloads/jobs')return send(201,{job:await controller.requireDownloads().create(body)});
+   if(req.url==='/api/downloads/choose-folder'){
+    if(!controller.settings.downloads.enabled)throw Error('Downloads module is disabled.');
+    if(Object.keys(body).some(k=>k!=='initialDirectory'))throw Error('Unexpected folder selection setting.');
+    const result=await picker.choose(body.initialDirectory??preferences.defaultFolder(options.dataDir,options.runtime.home));
+    if(!result.cancelled&&!preferences.rememberFolder(options.dataDir,result.path))result.warning='Folder selected, but the preference could not be saved.';
+    return send(200,result);
+   }
+   if(req.url==='/api/downloads/jobs'){
+    const job=await controller.requireDownloads().create(body);preferences.rememberFolder(options.dataDir,body.folder);return send(201,{job});
+   }
    if(req.url==='/api/downloads/action')return send(200,{job:await controller.requireDownloads().action(body.id,body.action)});
    if(req.url==='/api/downloads/pause-all'){await controller.requireDownloads().pauseAll();return send(200,{ok:true});}
    if(req.url==='/api/downloads/open-folder'){
@@ -36,6 +47,6 @@ async function startServer(options){
   }catch(e){if(!res.headersSent)send(400,{error:String(e.message).slice(0,500)});else res.destroy();}
  });
  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(options.port??18774,'127.0.0.1',resolve);});}catch(e){await controller.close();throw e;}
- port=server.address().port;return {url:`http://127.0.0.1:${port}/`,controller,async close(){await controller.close();await new Promise(resolve=>server.close(resolve));}};
+ port=server.address().port;return {url:`http://127.0.0.1:${port}/`,controller,async close(){picker.close?.();await controller.close();await new Promise(resolve=>server.close(resolve));}};
 }
 module.exports={startServer};

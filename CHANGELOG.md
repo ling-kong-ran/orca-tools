@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-24 — Orca Toolkit 1.0.1
+
+- Downloads 增加 Browse 文件夹选择按钮，保留手动输入路径。
+- Windows 原生目录选择支持中文和空格；取消不改变原目录，记录上次选择或成功用于下载的目录。
+- 目录选择接口沿用本机 Host/Origin/token 校验，不向 VPS 传输本机目录，不开放任意 shell。
+- 继续仅分发一个 Orca Toolkit 插件；原有 GPU 管理页面及后台服务保持各自职责。
+
 ## 2026-10-24 — GPU Bridge 配音修复
 
 - Qwen3 TTS 开放语言、预设音色与朗读风格参数；语言/音色使用节点 enum 验证，保留设备与模型路径过滤。
