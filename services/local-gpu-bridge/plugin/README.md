@@ -1,0 +1,7 @@
+# Local GPU
+
+This Claude Code plugin lets a VPS submit existing ComfyUI workflows to your own GPU computer over an existing Tailscale connection. Saved workflows in configured local folders appear automatically, including supported editor-format graphs and nested subgraphs. Read availability and required_parameters before running. Prompt, seed, size, sampling and asset parameters are exposed; models, devices and output paths stay fixed. Unsupported frontend widgets require a local API-format import. The local bridge and ComfyUI must be running. Credentials stay in the OS user's private configuration directory and are not included in the plugin. Running local jobs and unrelated ComfyUI queue items are never globally interrupted by this plugin.
+
+After installation start a new Claude session, check `/mcp`, and ask Claude to check the local GPU and list approved workflows. Use `/local-gpu:comfyui` for the bundled workflow instructions.
+
+Version 1.4 uses Git as the only project sync path. Commit and push on the VPS; project_git status/fetch/pull and automatic update before rendering keep the local mirror current. Local tracked edits are backed up then reset to the configured remote branch. No legacy project upload tools or generic shell are exposed. Godot user_args/project scripts and Blender Python remain available. Windows firewall rules persist; output metadata filtering remains active. For deployment see the repository's docs/gpu-bridge.md.

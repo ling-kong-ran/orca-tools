@@ -1,0 +1,23 @@
+{
+  "listen": "100.64.0.10",
+  "allowed_peers": ["100.64.0.20"],
+  "comfy_url": "http://127.0.0.1:8188",
+  "workflow_dirs": ["D:/ComfyUI/user/default/workflows"],
+  "max_active_jobs": 8,
+  "max_artifact_bytes": 2147483648,
+  "native": {
+    "godot_executable": "D:/Godot/Godot.exe",
+    "blender_executable": "D:/Blender/blender.exe",
+    "git_executable": "C:/Program Files/Git/cmd/git.exe",
+    "projects": [{
+      "id": "game",
+      "name": "Game",
+      "root": "D:/Projects/game",
+      "godot_subdir": "client",
+      "enabled": true,
+      "allow_scripts": true,
+      "sync_policy": "remote_wins",
+      "git": {"enabled": true, "remote": "origin", "branch": "main", "auto_pull_before_render": true}
+    }]
+  }
+}

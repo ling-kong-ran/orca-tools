@@ -1,0 +1,5 @@
+{
+  "name": "local-gpu",
+  "version": "1.4.0",
+  "description": "Run approved ComfyUI workflows on your own computer over Tailscale, inspect jobs, upload inputs and fetch outputs."
+}

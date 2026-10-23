@@ -1,0 +1,7 @@
+{
+  "name": "local-gpu-tools",
+  "owner": {"name": "Local Tools"},
+  "plugins": [
+    {"name": "local-gpu", "source": "./plugin", "description": "Call approved local ComfyUI workflows over Tailscale."}
+  ]
+}

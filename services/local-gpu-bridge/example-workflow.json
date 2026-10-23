@@ -1,0 +1,12 @@
+{
+  "id": "connection-test",
+  "name": "Connection test",
+  "description": "Create a tiny solid-color PNG without loading an AI model. Used to verify end-to-end execution and artifact transfer.",
+  "prompt": {
+    "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1, "color": 3368652}},
+    "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "local-gpu-bridge/connection-test"}}
+  },
+  "parameters": {
+    "color": {"node": "1", "input": "color", "type": "integer", "minimum": 0, "maximum": 16777215}
+  }
+}

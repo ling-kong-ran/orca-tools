@@ -1,0 +1,6 @@
+{
+  "environment": "My Remote Server",
+  "sshHost": "100.64.0.20",
+  "sshUser": "worker",
+  "sshPort": 22
+}

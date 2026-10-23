@@ -1,0 +1,14 @@
+[Unit]
+Description=VPS Claude account panel
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/orca-tools/account-switcher/panel/server.py
+WorkingDirectory=%h/.local/share/orca-tools/account-switcher/panel
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=default.target

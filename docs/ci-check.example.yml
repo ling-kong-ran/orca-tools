@@ -1,0 +1,22 @@
+name: Check tools
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python scripts/check.py
+      - run: python scripts/test_install.py
+      - run: python tools/account-switcher/test_panel.py
+      - run: python -m unittest test_bridge test_workflow_library test_native_control test_native_git -v
+        working-directory: services/local-gpu-bridge
+      - run: node --test plugins/parallel-download/test.cjs plugins/parallel-download/test-settings.cjs
+      - run: python plugins/parallel-download/test_remote.py

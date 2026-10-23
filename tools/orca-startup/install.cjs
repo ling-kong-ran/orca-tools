@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+if(process.platform!=='win32')throw Error('Windows only');
+const local=process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local');
+const root=path.join(local,'OrcaLocalTools');
+if(fs.existsSync(path.join(root,'bootstrap.pid')))throw Error('Existing helper found. Stop the verified helper process before upgrading.');
+fs.mkdirSync(root,{recursive:true});
+fs.copyFileSync(path.join(__dirname,'bootstrap.cjs'),path.join(root,'bootstrap.cjs'));
+const folder=path.join(process.env.APPDATA,'Microsoft','Windows','Start Menu','Programs','Startup');
+fs.mkdirSync(folder,{recursive:true});
+const command='"'+process.execPath+'" "'+path.join(root,'bootstrap.cjs')+'"';
+fs.writeFileSync(path.join(folder,'Orca Local Tools.vbs'),'Set toolsShell = CreateObject("WScript.Shell")\r\ntoolsShell.Run "'+command.replaceAll('"','""')+'", 0, False\r\n');
+console.log('Installed Windows login helper. Start bootstrap.cjs with Node now, or sign in again. Review and enable plugins in Orca first.');

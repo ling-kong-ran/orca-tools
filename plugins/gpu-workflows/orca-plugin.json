@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "id": "gpu-workflows",
+  "publisher": "local-tools",
+  "name": "GPU Workflows",
+  "version": "1.0.1",
+  "description": "Open your local ComfyUI workflow manager. Starts the installed local bridge if needed. Does not open a public port or read connection credentials.",
+  "engines": {
+    "orca": ">=1.4.237"
+  },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "capabilities": [],
+  "contributes": {
+    "commands": [
+      {
+        "id": "gpu-workflows.open",
+        "title": "GPU Workflows: Open Manager",
+        "context": "global"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gpu-workflows.open",
+        "key": "Ctrl+Alt+G",
+        "when": "global"
+      }
+    ]
+  }
+}
