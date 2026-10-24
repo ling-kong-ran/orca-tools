@@ -33,6 +33,7 @@ python scripts/install-local-gpu.py --settings scripts/gpu-settings.local.json
 | --- | --- |
 | `listen` | 本机 Tailscale IPv4 |
 | `allowed_peers` | 允许调用服务的 VPS Tailscale IPv4 列表 |
+| `comfy_startup` | 可选 ComfyUI 自启：enabled、root、python；可配置 input_directory、output_directory、model_paths_config |
 | `workflow_dirs` | 本机 ComfyUI 保存工作流的实际目录，支持多个 |
 | `native.godot_executable` | 普通 Godot exe 的完整路径 |
 | `native.blender_executable` | 普通 Blender exe 的完整路径 |
@@ -50,7 +51,7 @@ python scripts/install-local-gpu.py --settings scripts/gpu-settings.local.json
 4. 自动检查并申请安装专用渲染进程的持久防火墙规则；首次出现 Windows 管理员提示时需要本人确认。以后重启无须重复设置，缺失或失效才重新请求。
 5. 导出 `%LOCALAPPDATA%\LocalGpuBridge\client.local.json`，供私下传给 VPS。
 
-打开 `http://127.0.0.1:18773/`。确认已配置的渲染器显示 **Network privacy ready**，项目启用且有 **Auto-pull before rendering**。ComfyUI 需要另外启动，保持只监听本机回环地址，默认 8188。
+打开 `http://127.0.0.1:18773/`。确认已配置的渲染器显示 **Network privacy ready**，项目启用且有 **Auto-pull before rendering**。配置 `comfy_startup.enabled=true` 后，桥接在 Windows 登录启动时自动拉起 ComfyUI，Toolkit 激活或打开 GPU 管理页时也会检查启动。未启用该配置时才需要手动启动。固定只监听本机回环地址，端口取 comfy_url（默认8188）；不会关闭已有实例或中断其任务。首次冷启动加载自定义节点可能需要几分钟，日志在 `%LOCALAPPDATA%/LocalGpuBridge/comfy-startup.log`。
 
 > 如 Windows 防火墙阻止 VPS 入站访问 18772，可由管理员为**本机 Tailscale 地址 + 指定 VPS 私网源地址 + TCP 18772**创建窄范围允许规则；不要允许公网接口或任意来源。渲染器出站隔离规则与桥接入站规则是不同用途。Tailscale ACL 也必须允许这两个节点通信。
 
@@ -123,3 +124,7 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 安装器会创建 `go-local-gpu.exe` 和受管理的 server 路径。Go 编译关闭 cgo、联网模块下载与工具链自动切换，依赖必须已缓存。`native_script.py` 中的图库进程代理针对 `server/` 与 `./cmd/gameserver` 等约定，不是所有 Godot 项目都通用；其他布局需要增加专用适配器，不能直接开放任意子进程。
 
 升级/移除、备份恢复见 [operations.md](operations.md)；安全边界见 [architecture.md](architecture.md)。
+
+### 已安装版本补开 ComfyUI 自启
+
+先完成当前任务，再按升级流程更新桥接文件；在本机 config.json 或私有安装设置中添加 comfy_startup，对照示例填写现有 ComfyUI 的 Python 与 root，启用 enabled。模型共享路径配置使用 model_paths_config，必须沿用原启动配置以免模型/输入目录不一致。该设置只留在本机，不导出到 VPS。启动器带跨进程锁，已健康的服务不重复启动；端口已占用时等待现有服务，不杀进程。失败时记录日志，不循环启动多个实例。

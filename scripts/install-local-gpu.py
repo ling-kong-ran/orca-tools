@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 SOURCE = Path(__file__).resolve().parents[1] / 'services/local-gpu-bridge'
-FILES = ['bridge.py', 'workflow_library.py', 'native_control.py', 'native_process.py',
+FILES = ['bridge.py', 'comfy_startup.py', 'workflow_library.py', 'native_control.py', 'native_process.py',
          'native_git.py', 'native_script.py', 'native_godot.gd', 'native_blender.py',
          'Setup-Native-Privacy.ps1', 'manage.py', 'admin.py', 'admin.html']
 
@@ -61,6 +61,9 @@ def install(settings_file, start=True, startup=True):
     for directory in settings.get('workflow_dirs', []):
         if not Path(directory).is_dir():
             raise ValueError('A configured workflow directory does not exist.')
+    sys.path.insert(0, str(SOURCE))
+    from comfy_startup import launch_spec
+    launch_spec(settings)
     (root / 'app').mkdir(parents=True, exist_ok=True)
     (root / 'workflows').mkdir(exist_ok=True)
     config_file = root / 'config.json'

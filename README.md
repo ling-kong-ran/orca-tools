@@ -33,7 +33,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 - Windows Python **3.10+**、Node.js **18+**、Git；Linux Python **3.10+**，GPU MCP 另需已登录的 Claude Code。
 - 本机与 VPS 已登录同一个获授权的 Tailscale 网络。服务绑定私网/回环，不开公网端口。
 - GPU 功能还需本机 ComfyUI/Godot/Blender；工具不会自动下载模型、渲染器或运行不明安装包。
-- 当前版本：Orca Toolkit **1.1.0**、Local GPU Bridge/MCP **1.4.0**。旧独立插件已合并为 Toolkit 内部模块。
+- 当前版本：Orca Toolkit **1.1.1**、Local GPU Bridge/MCP **1.4.0**。旧独立插件已合并为 Toolkit 内部模块。
 
 ## 数据与执行边界
 

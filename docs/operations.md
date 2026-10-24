@@ -2,7 +2,7 @@
 
 ## 自动启动
 
-Windows GPU 安装器创建 `Local GPU Bridge.vbs` 登录启动项，使用安装时的 `pythonw.exe` 隐藏启动服务。它在 **Windows 用户登录后**运行，不是无人登录时的系统服务。Tailscale 应使用自动启动的 Windows 服务；ComfyUI 需用其自身方式启动。
+Windows GPU 安装器创建 `Local GPU Bridge.vbs` 登录启动项，使用安装时的 `pythonw.exe` 隐藏启动服务。它在 **Windows 用户登录后**运行，不是无人登录时的系统服务。Tailscale 应使用自动启动的 Windows 服务；配置 comfy_startup.enabled=true 后桥接自动拉起现有 ComfyUI；未配置时才需另行启动。Toolkit 激活和 GPU 入口也会触发同一受锁保护的启动器。
 
 Orca 入口插件按命令激活。要在 Orca 打开后自动激活 Toolkit，审核启用插件后执行：
 
@@ -75,6 +75,7 @@ Git 更新每次先备份，再将**受跟踪文件**重置为配置的远端分
 
 - **不能切账号/显示本机账号**：面板要在拥有远程 Orca 运行时的用户下启动，网页通过远程浏览器或 SSH 转发访问。切换后新建会话。
 - **下载插件启动错误**：先检查 settings.json、Windows OpenSSH、远程项目是否打开；不要复制别人机器的 IP 或 SSH 用户名。
+- **桥接在线但工作流 unavailable**：确认 ComfyUI 已启动；配置本机 comfy_startup 后登录自动启动，首次加载节点需稍等。检查 comfy-startup.log / comfy-launcher.log，不要重复打开多个实例。
 - **GPU MCP 不连接**：依次确认本机开机、Tailscale 连通、桥接启动、允许来源与 token、VPS LocalAPI 隔离；检查当前 Claude profile 是否安装了插件。
 - **Native network isolation is not ready**：看本机管理页与 bridge.log，确认管理员安装成功且 Windows 防火墙全部 profile 已启用。不通过设置假 ready 绕过检查。
 - **画面仍是旧版本**：VPS 是否 commit/push 到配置分支？本机 Git job 是否 succeeded？未推送代码不会同步；Git LFS/submodule 需额外准备。

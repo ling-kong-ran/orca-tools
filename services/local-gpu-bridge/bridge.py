@@ -383,6 +383,8 @@ def main():
     logging.info('Local GPU bridge is ready on its configured private address')
     from admin import start_admin
     start_admin(bridge, config.get('admin_port', 18773))
+    from comfy_startup import start_background
+    start_background(config)
     if config.get('auto_setup_privacy',True) and os.name=='nt':bridge.native.setup_privacy()
     server.serve_forever()
 

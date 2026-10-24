@@ -3,7 +3,7 @@
   "id": "toolkit",
   "publisher": "local-tools",
   "name": "Orca Toolkit",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "One control center for remote Claude accounts, parallel downloads and local GPU workflows. Independent modules, shared configuration and startup.",
   "engines": {
     "orca": ">=1.4.237"
