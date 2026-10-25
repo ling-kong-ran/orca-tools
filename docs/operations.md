@@ -80,6 +80,7 @@ Git 更新每次先备份，再将**受跟踪文件**重置为配置的远端分
 - **Native network isolation is not ready**：看本机管理页与 bridge.log，确认管理员安装成功且 Windows 防火墙全部 profile 已启用。不通过设置假 ready 绕过检查。
 - **画面仍是旧版本**：VPS 是否 commit/push 到配置分支？本机 Git job 是否 succeeded？未推送代码不会同步；Git LFS/submodule 需额外准备。
 - **Git 更新失败**：检查 Git 凭据是否能非交互工作、仓库根目录是否准确、文件占用。服务对短暂 Windows unlink 错误有限重试，持续占用需关闭相关进程后重试。
+- **Go 截图服务构建失败，GOPROXY=off**：检查 native.go_module_cache / go_build_cache 是否对应已准备依赖的本机缓存。不要开启受管 Go 的公网访问；修正路径并在空闲时重启桥接。
 - **Blender connected:false**：通常表示专用实例尚未启动；首次操作会启动。不要因此修改普通 Blender 实例。
 - **插件仍说不支持参数/Python**：旧 Claude 会话执行 `/reload-plugins`，检查当前 profile 已更新；若项目自己的 CLAUDE.md/记忆仍记着旧限制，按实际工具 schema 更新。
 

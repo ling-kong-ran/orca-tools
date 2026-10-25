@@ -61,6 +61,17 @@ def install(settings_file, start=True, startup=True):
     for directory in settings.get('workflow_dirs', []):
         if not Path(directory).is_dir():
             raise ValueError('A configured workflow directory does not exist.')
+    if native.get('go_executable'):
+        # Capture cache locations before offline builds intentionally disable GOENV.
+        query_env={**os.environ,'GOTOOLCHAIN':'local','GOPROXY':'off','GOFLAGS':''}
+        if native.get('go_root'):query_env['GOROOT']=native['go_root']
+        original_go=next(original for original,target in copies if str(target)==native['go_executable'])
+        query=subprocess.run([str(original_go),'env','-json','GOPATH','GOMODCACHE','GOCACHE','GOROOT'],env=query_env,
+                             capture_output=True,text=True,encoding='utf-8',timeout=20,creationflags=subprocess.CREATE_NO_WINDOW)
+        if query.returncode:raise ValueError('Cannot resolve local Go paths. Configure native.go_root for the selected compiler.')
+        paths=json.loads(query.stdout)
+        for setting,variable in [('go_module_cache','GOMODCACHE'),('go_build_cache','GOCACHE'),('go_root','GOROOT')]:
+            native.setdefault(setting,paths[variable])
     sys.path.insert(0, str(SOURCE))
     from comfy_startup import launch_spec
     launch_spec(settings)

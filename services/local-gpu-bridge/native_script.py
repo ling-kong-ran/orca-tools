@@ -5,6 +5,18 @@ redirected to fixed Godot/Go/game-server operations owned by this job.
 """
 import hashlib,json,os,pathlib,re,shutil,subprocess,time
 
+def go_build_environment(native):
+    clean={k:v for k,v in os.environ.items() if not any(t in k.upper() for t in ('TOKEN','SECRET','KEY','CREDENTIAL','PASSWORD','ORCA_','CLAUDE_'))}
+    clean.update({'CGO_ENABLED':'0','GOPROXY':'off','GOSUMDB':'off','GOTOOLCHAIN':'local','GOFLAGS':'','GOENV':'off','GOWORK':'off','GOROOT':native['go_root']})
+    # GOENV=off also hides the user's cache locations. Keep approved local paths
+    # explicit so offline builds can find dependencies already on this computer.
+    for setting,variable in [('go_path','GOPATH'),('go_module_cache','GOMODCACHE'),('go_build_cache','GOCACHE')]:
+        if native.get(setting):
+            value=pathlib.Path(native[setting])
+            if not value.is_absolute():raise ValueError('Go cache settings must use absolute local paths.')
+            clean[variable]=str(value)
+    return clean
+
 def arguments(value):
     if not isinstance(value,list) or len(value)>256 or any(not isinstance(s,str) or len(s)>8192 or '\0' in s for s in value):
         raise ValueError('user_args must contain at most 256 text arguments.')
@@ -87,8 +99,7 @@ class ProcessBroker:
             self.control.guard.require('server-'+self.job['project_id']);self.control.guard.require('go')
             target=pathlib.Path(server);target.parent.mkdir(parents=True,exist_ok=True)
             # Fixed trusted compiler, no cgo, downloads, toolchain switch or toolexec.
-            clean={k:v for k,v in os.environ.items() if not any(t in k.upper() for t in ('TOKEN','SECRET','KEY','CREDENTIAL','PASSWORD','ORCA_','CLAUDE_'))}
-            clean.update({'CGO_ENABLED':'0','GOPROXY':'off','GOSUMDB':'off','GOTOOLCHAIN':'local','GOFLAGS':'','GOENV':'off','GOWORK':'off','GOROOT':native['go_root']})
+            clean=go_build_environment(native)
             with (self.folder/'build.log').open('wb') as log:
                 p=subprocess.run([native['go_executable'],'-C',str(self.root/'server'),'build','-o',str(target),'./cmd/gameserver'],env=clean,stdin=subprocess.DEVNULL,stdout=log,stderr=log,timeout=300,creationflags=0x08000000)
             if p.returncode:return {'code':p.returncode,'output':'Managed game-server build failed; inspect the local build log.'}

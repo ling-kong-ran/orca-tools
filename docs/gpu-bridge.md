@@ -128,3 +128,9 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 ### 已安装版本补开 ComfyUI 自启
 
 先完成当前任务，再按升级流程更新桥接文件；在本机 config.json 或私有安装设置中添加 comfy_startup，对照示例填写现有 ComfyUI 的 Python 与 root，启用 enabled。模型共享路径配置使用 model_paths_config，必须沿用原启动配置以免模型/输入目录不一致。该设置只留在本机，不导出到 VPS。启动器带跨进程锁，已健康的服务不重复启动；端口已占用时等待现有服务，不杀进程。失败时记录日志，不循环启动多个实例。
+
+### Go 游戏服务离线构建
+
+截图脚本需要游戏服务时，受管 Go 只允许离线构建。安装器会读取既有 Go 用户配置中的 GOMODCACHE/GOCACHE，并写入本机 native.go_module_cache / native.go_build_cache；可选 native.go_path 指定单个工作目录。构建仍设置 GOENV=off、GOPROXY=off、GOTOOLCHAIN=local，避免项目修改工具链或联网下载。旧安装需要补上这些本机路径后重启空闲桥接。依赖必须事先由本机可信环境准备在缓存中；不能通过关闭网络隔离修复。
+
+若日志提示 `module lookup disabled by GOPROXY=off`，先检查受管构建的模块缓存是否与正常终端一致。GOENV=off 会隐藏通过 go env -w 保存的缓存位置，即使依赖已经下载，也可能查错目录。

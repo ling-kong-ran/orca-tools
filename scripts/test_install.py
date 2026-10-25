@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -59,6 +60,22 @@ class InstallTests(unittest.TestCase):
             settings.write_text(json.dumps({'listen': '8.8.8.8', 'allowed_peers': []}))
             with self.assertRaisesRegex(ValueError, 'Tailscale'):
                 installer.install(settings, start=False, startup=False)
+
+    def test_go_user_cache_paths_are_captured_for_offline_builds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);python=root/'python.exe';python.touch();python.with_name('pythonw.exe').touch()
+            go=root/'go.exe';go.write_bytes(b'fixture compiler');sdk=root/'sdk';sdk.mkdir()
+            paths={'GOROOT':str(sdk),'GOPATH':str(root/'workspace'),'GOMODCACHE':str(root/'modules'),'GOCACHE':str(root/'cache')}
+            source=root/'settings.local.json'
+            source.write_text(json.dumps({'listen':'100.64.0.10','allowed_peers':['100.64.0.20'],'native':{'go_executable':str(go),'go_root':str(sdk),'projects':[]}}))
+            with patch.dict(os.environ,{'LOCALAPPDATA':str(root/'Local'),'APPDATA':str(root/'Roaming')}), \
+                 patch.object(installer.sys,'executable',str(python)), \
+                 patch.object(installer.subprocess,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(paths),'')) as query:
+                installer.install(source,start=False,startup=False)
+                config=json.loads((root/'Local/LocalGpuBridge/config.json').read_text())
+                self.assertEqual(config['native']['go_module_cache'],paths['GOMODCACHE'])
+                self.assertEqual(config['native']['go_build_cache'],paths['GOCACHE'])
+                self.assertEqual(query.call_args.kwargs['env']['GOPROXY'],'off')
 
 
 if __name__ == '__main__':
