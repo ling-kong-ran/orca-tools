@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-26 — 失败任务复用 request_id
+
+- Git/Godot/Blender 与 ComfyUI 支持同 request_id、同参数重新提交已失败任务，创建新一轮 job，保留原记录。
+- 返回 attempt/retry_of，按持久化轮次选择最新任务；并发重试去重，服务重启后仍然有效。
+- 进行中、成功、未知或已取消的任务保持原结果；更改参数仍拒绝。现有 MCP 工具接口兼容，无需 reload plugin。
+- 增加并发、恢复、限流、参数绑定及 ComfyUI 重试测试。
+
 ## 2026-10-25 — GitHub SSH 代理排错文档
 
 - 补充 GitHub SSH 443 经本机 SOCKS 代理、Windows OpenSSH 与 MSYS SHELL 兼容问题的配置和验证步骤。

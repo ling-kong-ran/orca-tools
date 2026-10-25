@@ -4,6 +4,7 @@ import logging.handlers, mimetypes, os, pathlib, re, threading, time, urllib.err
 import urllib.parse, urllib.request, uuid, shutil
 from workflow_library import WorkflowLibrary
 from native_control import NativeControl
+from job_reuse import latest_attempt, attempt_fields
 
 SLUG = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 HEX = re.compile(r'^[a-f0-9]{32}$')
@@ -195,6 +196,8 @@ class Bridge:
         result = {k: job[k] for k in ('id', 'workflow_id', 'kind', 'status', 'created_at', 'updated_at')}
         for key in ('error', 'message'):
             if key in job: result[key] = job[key]
+        for key in ('attempt','retry_of'):
+            if key in job: result[key] = job[key]
         result['artifacts'] = [{'index': i, 'filename': item['filename']} for i, item in enumerate(job.get('artifacts', []))]
         return result
     def save(self, job):
@@ -205,9 +208,8 @@ class Bridge:
         parameters = body.get('parameters', {})
         fingerprint = hashlib.sha256(json.dumps({'workflow_id': body.get('workflow_id'), 'parameters': parameters}, sort_keys=True).encode()).hexdigest()
         with self.lock:
-            existing = next((j for j in self.jobs.values() if j.get('request_id') == request_id), None)
-            if existing:
-                if existing['fingerprint'] != fingerprint: raise ValueError('Request id already used with different inputs.')
+            existing = latest_attempt(self.jobs, request_id, fingerprint)
+            if existing and existing['status'] != 'failed':
                 return self.public(existing)
             workflow = next((w for w in self.workflows() if w['id'] == body.get('workflow_id')), None)
             if not workflow: raise ValueError('Unknown workflow. List the current saved workflows first.')
@@ -225,6 +227,7 @@ class Bridge:
             job = {'id': uuid.uuid4().hex, 'request_id': request_id, 'fingerprint': fingerprint,
                    'workflow_id': workflow['id'], 'kind': 'comfyui.workflow', 'status': 'submitting',
                    'created_at': time.time(), 'updated_at': time.time(), 'artifacts': []}
+            job.update(attempt_fields(existing))
             self.jobs[job['id']] = job; self.save(job)
             try:
                 job['prompt_id'] = self.adapters[job['kind']].submit(prompt, 'local-gpu-bridge-' + job['id'])

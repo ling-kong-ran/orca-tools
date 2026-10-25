@@ -45,6 +45,20 @@ class Tests(unittest.TestCase):
             with self.assertRaises(ValueError):apply_parameters(self.workflow,parameters)
         self.assertEqual(self.workflow['prompt']['1']['inputs']['color'],3368652)
         with self.assertRaises(ValueError):self.client.call('run_workflow',{'workflow_id':'../../private','parameters':{}})
+    def test_failed_workflow_can_reuse_request_id_and_keeps_older_attempt(self):
+        first=self.submit();old=self.bridge.jobs[first['id']]
+        self.adapter.states[old['prompt_id']]={'status':'failed','error':'Fixture failure','artifacts':[]}
+        self.assertEqual(self.client.call('job_status',{'job_id':old['id']})['status'],'failed')
+        retry=self.submit();self.assertNotEqual(retry['id'],old['id']);self.assertEqual(retry['attempt'],2);self.assertEqual(retry['retry_of'],old['id'])
+        self.assertEqual(self.submit()['id'],retry['id']);self.assertEqual(self.adapter.submissions,2)
+        new=self.bridge.jobs[retry['id']];self.adapter.complete(new['prompt_id']);self.bridge.inspect(new['id'])
+        restored=Bridge(self.config,self.adapter)
+        value=restored.submit({'workflow_id':'connection-test','parameters':{'color':123},'request_id':'b'*32})
+        self.assertEqual(value['id'],new['id']);self.assertEqual(value['status'],'succeeded')
+        self.assertEqual(restored.jobs[old['id']]['status'],'failed');self.assertEqual(self.adapter.submissions,2)
+    def test_uncertain_workflow_request_is_not_resubmitted(self):
+        first=self.submit();job=self.bridge.jobs[first['id']];job['status']='unknown';self.bridge.save(job)
+        self.assertEqual(self.submit()['id'],job['id']);self.assertEqual(self.adapter.submissions,1)
     def test_artifacts_owned_download_no_overwrite_and_restore(self):
         created=self.submit();job=self.bridge.jobs[created['id']];self.adapter.complete(job['prompt_id'])
         status=self.client.call('job_status',{'job_id':job['id']});self.assertEqual(status['status'],'succeeded')

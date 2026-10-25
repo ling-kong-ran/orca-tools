@@ -56,6 +56,8 @@ BLENDER_FIELDS={
  ,'execute_code':{'code','parameters','timeout_seconds'},'run_script':{'path','user_args','parameters','timeout_seconds'}
 }
 
+from job_reuse import latest_attempt, attempt_fields
+
 class NativeControl:
     def __init__(self,config,save_config=None,guard=None,process_factory=ManagedProcess):
         self.config=config;self.root=pathlib.Path(config['data_dir'])/'native';self.root.mkdir(parents=True,exist_ok=True)
@@ -270,7 +272,7 @@ class NativeControl:
             state.update({f['path']:f['sha256'] for f in plan['files']});atomic(state_file,state)
             plan['status']='applied';atomic(self.root/'plans'/(ident+'.json'),plan)
             return self.public_plan(plan)
-    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','artifacts') if k in job})
+    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','artifacts','attempt','retry_of') if k in job})
     def save_job(self,job):job['updated_at']=time.time();atomic(self.root/'jobs'/(job['id']+'.json'),job)
     def project_git(self,project_id,operation='status',request_id=None):
         project,root=self.project(project_id)
@@ -298,12 +300,12 @@ class NativeControl:
         if not isinstance(request_id,str) or not HEX.fullmatch(request_id):raise ValueError('Provide a 32-character request_id.')
         fingerprint=hashlib.sha256(json.dumps({'project_id':project_id,'engine':engine,'operation':operation,'arguments':args},sort_keys=True).encode()).hexdigest()
         with self.lock:
-            previous=next((j for j in self.jobs.values() if j.get('request_id')==request_id),None)
-            if previous:
-                if previous['fingerprint']!=fingerprint:raise ValueError('Request id already used with different parameters.')
+            previous=latest_attempt(self.jobs,request_id,fingerprint)
+            if previous and previous['status']!='failed':
                 return self.public_job(previous)
             if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=8:raise ValueError('Native task queue is full.')
             job={'id':uuid.uuid4().hex,'request_id':request_id,'fingerprint':fingerprint,'project_id':project_id,'engine':engine,'operation':operation,'arguments':args,'status':'queued','created_at':time.time(),'artifacts':[]}
+            job.update(attempt_fields(previous))
             self.jobs[job['id']]=job;self.save_job(job)
             threading.Thread(target=self.run,args=(job,),daemon=True).start()
             return self.public_job(job)

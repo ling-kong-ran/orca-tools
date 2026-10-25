@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 SOURCE = Path(__file__).resolve().parents[1] / 'services/local-gpu-bridge'
-FILES = ['bridge.py', 'comfy_startup.py', 'workflow_library.py', 'native_control.py', 'native_process.py',
+FILES = ['bridge.py', 'comfy_startup.py', 'job_reuse.py', 'workflow_library.py', 'native_control.py', 'native_process.py',
          'native_git.py', 'native_script.py', 'native_godot.gd', 'native_blender.py',
          'Setup-Native-Privacy.ps1', 'manage.py', 'admin.py', 'admin.html']
 

@@ -123,4 +123,18 @@ git -C D:/Projects/game config --local core.sshCommand C:/Windows/System32/OpenS
 git -C D:/Projects/game ls-remote origin refs/heads/main
 ```
 
-然后通过 VPS 的 project_git pull 验证桥接进程也能非交互访问。不要把此 GitHub 代理套到 Tailscale 私网 SSH 上。旧失败任务保留原记录，修复后通过新任务确认状态。参见 [GitHub 官方 SSH 443 说明](https://docs.github.com/en/authentication/troubleshooting-ssh/using-ssh-over-the-https-port)。
+然后通过 VPS 的 project_git pull 验证桥接进程也能非交互访问。不要把此 GitHub 代理套到 Tailscale 私网 SSH 上。旧失败任务保留原记录；修复后可携带原 request_id 和原参数再次提交，服务端创建新一轮任务，后续查询本次返回的新 job id。参见 [GitHub 官方 SSH 443 说明](https://docs.github.com/en/authentication/troubleshooting-ssh/using-ssh-over-the-https-port)。
+
+## 复用任务请求 ID
+
+Git、Godot、Blender 和 ComfyUI 提交任务时均可复用原来的32位 request_id；参数必须完全相同。
+
+| 最近一轮状态 | 再次提交相同请求的行为 |
+| --- | --- |
+| failed | 创建新 job id；attempt 加一，retry_of 指向旧任务 |
+| queued / running / submitting | 返回当前任务，避免重复执行 |
+| succeeded | 返回成功结果，不再次执行 |
+| unknown | 返回未知状态，先确认原任务是否完成，不盲目再运行 |
+| cancelled | 保留取消结果，不自动恢复 |
+
+这是再次调用提交工具时的行为，轮询 job_status/native_job_status 不会触发重试。每次提交后使用返回的 job id 查询；旧 job id 仍表示原来那轮失败。重复请求受锁保护，修复后并发提交也只创建一轮重试。相同 request_id 改参数会报错，需换新请求 ID。
