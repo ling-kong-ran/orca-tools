@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-25 — GitHub SSH 代理排错文档
+
+- 补充 GitHub SSH 443 经本机 SOCKS 代理、Windows OpenSSH 与 MSYS SHELL 兼容问题的配置和验证步骤。
+- 说明 GitHub 代理应只匹配对应 Host，保留 Tailscale 私网 SSH 与主机密钥校验。
+
 ## 2026-10-25 — Go 离线构建缓存路径修复
 
 - 修复 GOENV=off 隐藏用户配置的 Go 模块/编译缓存位置，导致已下载依赖仍报 module lookup disabled 的问题。

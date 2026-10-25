@@ -95,3 +95,32 @@ Git 更新每次先备份，再将**受跟踪文件**重置为配置的远端分
 ## 可选 CI
 
 docs/ci-check.example.yml 提供 Windows GitHub Actions 测试流程模板。当前仓库提交不启用 workflow；如需启用，使用具有 workflow 权限的 GitHub 授权，将该文件放到 .github/workflows/check.yml 后提交。所有测试命令也可按 README 在本机运行。
+
+## GitHub SSH 与本机代理
+
+GitHub 的 `ssh.github.com:443` 仍是 SSH 协议，不能因端口是443就假设它会使用 HTTP 系统代理。代理 Fake-IP 出现在错误信息里，也不能证明连接已正确走代理。
+
+本机使用 SOCKS 代理时，可在用户 `.ssh/config` 配置仅匹配 GitHub 的规则（以下7897为示例，应换成本机真实端口；Git for Windows 提供 connect.exe）：
+
+```sshconfig
+Host github.com ssh.github.com
+    HostName ssh.github.com
+    User git
+    Port 443
+    ProxyCommand "C:/Program Files/Git/mingw64/bin/connect.exe" -S 127.0.0.1:7897 %h %p
+    StrictHostKeyChecking yes
+    ConnectTimeout 15
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+```
+
+保持现有 SSH 配置的其他 Host/Match 规则作用域，不把 ProxyCommand 放在通配 Host 下。首次使用时需先按 GitHub 官方指纹核实主机密钥；不要关闭主机密钥检查。
+
+若 Git 自带的 MSYS SSH 因当前 SHELL 环境调用 PowerShell 执行 `exec` 而失败，可仅在对应仓库指定 Windows OpenSSH：
+
+```powershell
+git -C D:/Projects/game config --local core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe
+git -C D:/Projects/game ls-remote origin refs/heads/main
+```
+
+然后通过 VPS 的 project_git pull 验证桥接进程也能非交互访问。不要把此 GitHub 代理套到 Tailscale 私网 SSH 上。旧失败任务保留原记录，修复后通过新任务确认状态。参见 [GitHub 官方 SSH 443 说明](https://docs.github.com/en/authentication/troubleshooting-ssh/using-ssh-over-the-https-port)。
