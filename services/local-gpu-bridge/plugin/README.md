@@ -11,3 +11,5 @@ Request IDs can be reused with identical inputs. Re-submitting a confirmed faile
 Downloaded ComfyUI/native/project files use the receiving VPS clock for access/modification times at transfer completion. Download receipts include saved_at with a timezone offset, timezone, and timestamp_source=receiver. Unix timestamps represent an absolute instant; file-browser displays can still use the viewer’s timezone.
 
 VRoid Studio (1.5+): vroid-local provides vroid_tools and vroid_operation, sharing approved projects and file downloads. See docs/vroid.md in the repository for pinned local installation and scope. The upstream adapter has no VRM export API.
+
+Blender VRM (1.5.2+): install the official VRM extension on the Windows computer with scripts/install-blender-vrm.py. The managed factory-startup instance enables it automatically. scene_info reports capabilities.vrm_import/vrm_export. import_asset/export_asset accept .vrm project paths; this does not convert .vroid projects directly. VRoid Studio export remains a separate step.

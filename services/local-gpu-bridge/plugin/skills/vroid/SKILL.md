@@ -14,3 +14,5 @@ open/save require project-relative .vroid paths; save always needs path and repl
 Mutation calls block while the model rebuilds. A timeout can mean the operation is still running: query status before repeating. Never poll screenshot during rebuilds. Do not query host identity, hardware or network information. No batch, UI screenshot, shell, raw protocol or diagnostic bypass is available.
 
 Upstream 1.0.0 does not expose VRM export. Do not invent an export operation or claim a .vroid save is a VRM export. VRM files exported by Studio can be edited/rendered with Blender and its separately installed VRM Add-on. Local rendering is on the PC; do not install another VRoid Studio on the VPS.
+
+Blender VRM support: check blender_operation(scene_info). Its capabilities.vrm_import/vrm_export indicate installed operator support, including in the factory-startup managed instance. Use import_asset/export_asset with project-relative .vrm paths, or Blender Python. Preserve the model metadata/license requirements. This is separate from exporting the initial .vrm from VRoid Studio; never ask to reinstall VRoid MCP as a substitute for the Blender VRM extension.

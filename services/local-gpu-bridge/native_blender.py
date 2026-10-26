@@ -1,6 +1,12 @@
 """Restricted Blender command worker. Loaded only in the managed Blender instance."""
 import bpy,json,pathlib,sys,math,os
 from mathutils import Vector
+# Blender --python does not consistently add the worker directory to sys.path.
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
+from native_blender_vrm import capabilities as vrm_capabilities, operate as vrm_operate
+# Enabling extension preferences must not auto-save factory settings over the
+# user's regular Blender configuration.
+bpy.context.preferences.use_preferences_save=False
 settings=json.loads(pathlib.Path(sys.argv[sys.argv.index('--')+1]).read_text(encoding='utf-8'))
 root=pathlib.Path(settings['project']).resolve();spool=pathlib.Path(settings['spool']);out=pathlib.Path(settings['outputs']).resolve()
 spool.mkdir(parents=True,exist_ok=True);out.mkdir(parents=True,exist_ok=True)
@@ -25,7 +31,7 @@ def execute(command,args,job_id):
             value=json.loads(json.dumps(namespace.get('result'),default=str))
             return {'executed':True,'result':value}
         finally:sys.argv=previous;os.chdir(cwd)
-    if command=='scene_info':return {'objects':[object_info(o) for o in list(bpy.context.scene.objects)[:500]],'object_count':len(bpy.context.scene.objects)}
+    if command=='scene_info':return {'objects':[object_info(o) for o in list(bpy.context.scene.objects)[:500]],'object_count':len(bpy.context.scene.objects),'capabilities':vrm_capabilities()}
     if command=='open':
         file=local_file(args['path'],{'.blend'})
         bpy.ops.wm.open_mainfile(filepath=str(file),load_ui=False,use_scripts=False)
@@ -83,16 +89,18 @@ def execute(command,args,job_id):
         scene.render.use_compositing=False;scene.render.image_settings.file_format='PNG';scene.render.filepath=str(out/(job_id+'.png'))
         bpy.ops.render.render(write_still=True);return {'artifact':job_id+'.png','hardware_render':True}
     if command=='import_asset':
-        file=local_file(args['path'],{'.glb','.gltf','.obj','.ply','.stl'})
-        if file.suffix.lower() in ('.glb','.gltf'):bpy.ops.import_scene.gltf(filepath=str(file))
+        file=local_file(args['path'],{'.glb','.gltf','.obj','.ply','.stl','.vrm'})
+        if file.suffix.lower()=='.vrm':vrm_operate(file)
+        elif file.suffix.lower() in ('.glb','.gltf'):bpy.ops.import_scene.gltf(filepath=str(file))
         elif file.suffix.lower()=='.obj':bpy.ops.wm.obj_import(filepath=str(file))
         elif file.suffix.lower()=='.ply':bpy.ops.wm.ply_import(filepath=str(file))
         else:bpy.ops.wm.stl_import(filepath=str(file))
         return {'imported':args['path']}
     if command=='export_asset':
-        file=local_file(args['path'],{'.glb','.obj'});file.parent.mkdir(parents=True,exist_ok=True)
+        file=local_file(args['path'],{'.glb','.obj','.vrm'});file.parent.mkdir(parents=True,exist_ok=True)
         if file.exists() and not args.get('replace',False):raise ValueError('File exists; explicit replace is required')
-        if file.suffix.lower()=='.glb':bpy.ops.export_scene.gltf(filepath=str(file),export_format='GLB',export_yup=True)
+        if file.suffix.lower()=='.vrm':vrm_operate(file,export=True)
+        elif file.suffix.lower()=='.glb':bpy.ops.export_scene.gltf(filepath=str(file),export_format='GLB',export_yup=True)
         else:bpy.ops.wm.obj_export(filepath=str(file))
         return {'exported':args['path']}
     raise ValueError('Operation is not exposed')

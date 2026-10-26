@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27 — Blender VRM 扩展 / MCP 1.5.2
+
+- 增加 VRM 4.10.2 离线安装器与固定校验，不开放 Blender 公网访问，不覆盖普通用户偏好设置。
+- 受控 Blender 自动加载已安装的 VRM 扩展并初始化其偏好项；禁止把 factory-startup 配置自动保存为普通 Blender 的配置。
+- scene_info 报告 VRM 导入/导出能力，import_asset/export_asset 支持项目内 .vrm 文件。
+- 验证 VRM 导出/导入往返；VRoid Studio 自身导出仍不在上游 MCP 接口内。
+
 ## 2026-10-27 — VRoid 编辑器与角色状态 / MCP 1.5.1
 
 - 区分编辑器连通状态和角色模型就绪状态，避免将主菜单的 ready=false 误判为仍在启动。
