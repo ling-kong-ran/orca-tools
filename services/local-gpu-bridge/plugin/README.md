@@ -9,3 +9,5 @@ Version 1.4 uses Git as the only project sync path. Commit and push on the VPS; 
 Request IDs can be reused with identical inputs. Re-submitting a confirmed failed request creates a new job with attempt/retry_of metadata; poll the new returned job ID. Active, successful, unknown and cancelled attempts are returned without resubmission. Never change inputs under the same request ID. Status polling itself does not retry. This is backward-compatible bridge behavior; existing MCP clients need no schema update.
 
 Downloaded ComfyUI/native/project files use the receiving VPS clock for access/modification times at transfer completion. Download receipts include saved_at with a timezone offset, timezone, and timestamp_source=receiver. Unix timestamps represent an absolute instant; file-browser displays can still use the viewer’s timezone.
+
+VRoid Studio (1.5+): vroid-local provides vroid_tools and vroid_operation, sharing approved projects and file downloads. See docs/vroid.md in the repository for pinned local installation and scope. The upstream adapter has no VRM export API.

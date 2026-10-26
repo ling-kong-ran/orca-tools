@@ -11,7 +11,7 @@ import sys
 
 SOURCE = Path(__file__).resolve().parents[1] / 'services/local-gpu-bridge'
 FILES = ['bridge.py', 'comfy_startup.py', 'job_reuse.py', 'workflow_library.py', 'native_control.py', 'native_process.py',
-         'native_git.py', 'native_script.py', 'native_godot.gd', 'native_blender.py',
+         'native_git.py', 'native_script.py', 'native_godot.gd', 'native_blender.py', 'native_vroid.py',
          'Setup-Native-Privacy.ps1', 'manage.py', 'admin.py', 'admin.html']
 
 
@@ -79,9 +79,14 @@ def install(settings_file, start=True, startup=True):
     (root / 'workflows').mkdir(exist_ok=True)
     config_file = root / 'config.json'
     previous = json.loads(config_file.read_text()) if config_file.exists() else {}
+    # The optional Studio installer adds a managed copy after the base install.
+    # Retain it when upgrading from the original connection settings file.
+    managed_vroid = root / 'native/vroid/VRoidStudio-LocalGpu.exe'
+    if 'vroid_executable' not in native and managed_vroid.is_file() and previous.get('native', {}).get('vroid_executable') == str(managed_vroid):
+        native['vroid_executable'] = str(managed_vroid)
     config = {**settings, 'token': previous.get('token') or secrets.token_hex(32),
               'data_dir': str(root), 'port': 18772, 'admin_port': 18773,
-              'auto_setup_privacy': bool(copies), 'native': native}
+              'auto_setup_privacy': bool(copies or native.get('vroid_executable')), 'native': native}
     config.setdefault('comfy_url', 'http://127.0.0.1:8188')
     # Game-server binaries are always placed under the bridge, never at arbitrary paths.
     native['server_executables'] = {

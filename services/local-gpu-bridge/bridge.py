@@ -325,6 +325,8 @@ def make_handler(bridge):
                         self.reply_started=True;self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(size));self.end_headers()
                         with file.open('rb') as source:shutil.copyfileobj(source,self.wfile,1024*1024)
                         return
+                if self.command == 'GET' and route == '/v1/vroid/tools': return self.send_json(200, bridge.native.vroid.tools())
+                if self.command == 'POST' and route == '/v1/vroid/call': return self.send_json(200, bridge.native.vroid.call(**self.body()))
                 if self.command == 'GET' and route == '/v1/jobs':
                     with bridge.lock: values = [bridge.public(j) for j in sorted(bridge.jobs.values(), key=lambda j:j['created_at'], reverse=True)[:100]]
                     return self.send_json(200, {'jobs': values})

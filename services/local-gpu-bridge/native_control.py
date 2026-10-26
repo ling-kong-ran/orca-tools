@@ -64,6 +64,8 @@ class NativeControl:
         self.save_config=save_config;self.guard=guard or EgressGuard(config.get('native',{}));self.process_factory=process_factory
         self.lock=threading.RLock();self.execute_lock=threading.Lock();self.blender=None;self.blender_project=None
         self.jobs={};self.plans={}
+        from native_vroid import VroidControl
+        self.vroid=VroidControl(self)
         self.privacy_setup={'status':'idle'}
         for f in (self.root/'jobs').glob('*.json'):
             try:
@@ -124,6 +126,7 @@ class NativeControl:
             row={'engine':engine,'installed':configured,'network_isolated':configured and self.guard.ready(engine)}
             if engine=='blender':row['connected']=self.blender is not None and self.blender.poll() is None
             engines.append(row)
+        engines.append(self.vroid.status())
         result={'engines':engines,'projects':self.projects(local),'shell_exposed':False,'raw_code_tool_exposed':any(p.get('allow_scripts') for p in self.projects()),'project_code_executes_locally':True}
         if local:
             result['setup_script']=str(pathlib.Path(__file__).parent/'Setup-Native-Privacy.ps1')
@@ -135,7 +138,7 @@ class NativeControl:
             self.privacy_setup={'status':'checking'}
         def setup():
             try:
-                engines=[engine for engine in ('godot','blender') if self.config.get('native',{}).get(engine+'_executable')]
+                engines=[engine for engine in ('godot','blender','vroid') if self.config.get('native',{}).get(engine+'_executable')]
                 if self.config.get('native',{}).get('go_executable'):engines.append('go')
                 engines+=['server-'+key for key in self.config.get('native',{}).get('server_executables',{})]
                 if all(self.guard.ready(engine) for engine in engines):

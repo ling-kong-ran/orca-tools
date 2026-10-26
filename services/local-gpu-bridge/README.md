@@ -1,10 +1,11 @@
-# Local GPU Bridge 1.4.0
+# Local GPU Bridge 1.5.0
 
 Windows 私网 GPU 服务和 Linux Claude Code MCP 插件。
 
 - [完整部署步骤](../../docs/gpu-bridge.md)
 - [架构与权限](../../docs/architecture.md)
 - [自启、升级、备份与移除](../../docs/operations.md)
+- [VRoid Studio 接入](../../docs/vroid.md)
 
 服务源码位于本目录，远程插件在 `plugin/`，marketplace 清单位于 `.claude-plugin/`。只使用 Python 标准库，不需要 pip 安装第三方依赖。
 

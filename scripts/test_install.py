@@ -52,6 +52,14 @@ class InstallTests(unittest.TestCase):
                 second = json.loads((installed / 'config.json').read_text())
                 self.assertEqual(first['token'], second['token'])
                 self.assertTrue((installed / 'config.previous.local.json').exists())
+                managed_vroid = installed / 'native/vroid/VRoidStudio-LocalGpu.exe'
+                managed_vroid.parent.mkdir(parents=True); managed_vroid.touch()
+                second['native']['vroid_executable'] = str(managed_vroid)
+                (installed / 'config.json').write_text(json.dumps(second))
+                installer.install(settings, start=False)
+                third = json.loads((installed / 'config.json').read_text())
+                self.assertEqual(third['native']['vroid_executable'], str(managed_vroid))
+                self.assertTrue(third['auto_setup_privacy'])
                 spawn.assert_not_called()
 
     def test_public_endpoint_rejected_before_installation(self):

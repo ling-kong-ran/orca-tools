@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27 — VRoid Studio / MCP 1.5.0
+
+- 在现有 Toolkit GPU 模块加入 vroid-local：通过本机编辑器 API 新建/打开角色、预设和参数调整、镜头、预览与 .vroid 保存。
+- 独立 Studio 副本、固定依赖校验、离线 IL2CPP 启动、持久防火墙与按需启动。
+- 项目相对路径及显式覆盖、文本信息过滤、仅模型预览及 PNG 元数据清除；不暴露原始命令、整窗截图或通用 shell。
+- 增加部署步骤和上游 API 限制说明；上游 1.0.0 尚无 VRM 导出工具。
+
 ## 2026-10-26 — Windows 音频产物与 VPS 文件时间 / MCP 1.4.1
 
 - 修复 SaveAudioAdvanced 等节点返回 Windows 反斜杠子目录时，桥接过滤掉已保存音频的问题；保留路径越界检查。

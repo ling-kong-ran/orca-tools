@@ -134,3 +134,7 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 截图脚本需要游戏服务时，受管 Go 只允许离线构建。安装器会读取既有 Go 用户配置中的 GOMODCACHE/GOCACHE，并写入本机 native.go_module_cache / native.go_build_cache；可选 native.go_path 指定单个工作目录。构建仍设置 GOENV=off、GOPROXY=off、GOTOOLCHAIN=local，避免项目修改工具链或联网下载。旧安装需要补上这些本机路径后重启空闲桥接。依赖必须事先由本机可信环境准备在缓存中；不能通过关闭网络隔离修复。
 
 若日志提示 `module lookup disabled by GOPROXY=off`，先检查受管构建的模块缓存是否与正常终端一致。GOENV=off 会隐藏通过 go env -w 保存的缓存位置，即使依赖已经下载，也可能查错目录。
+
+## VRoid Studio
+
+See [VRoid deployment and operations](vroid.md) for the optional managed Studio adapter. It shares this bridge and Toolkit entry; do not install a separate Orca plugin.

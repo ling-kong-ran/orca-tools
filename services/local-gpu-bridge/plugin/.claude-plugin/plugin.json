@@ -1,5 +1,5 @@
 {
   "name": "local-gpu",
-  "version": "1.4.1",
-  "description": "Run approved ComfyUI workflows on your own computer over Tailscale, inspect jobs, upload inputs and fetch outputs."
+  "version": "1.5.0",
+  "description": "Local ComfyUI, Godot, Blender and VRoid Studio tools over an authenticated Tailscale bridge."
 }

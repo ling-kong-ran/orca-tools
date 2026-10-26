@@ -5,6 +5,7 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/client.py"]
     },
     "godot-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","godot"]},
-    "blender-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","blender"]}
+    "blender-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","blender"]},
+    "vroid-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","vroid"]}
   }
 }

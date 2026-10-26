@@ -2,6 +2,6 @@
   "name": "local-gpu-tools",
   "owner": {"name": "Local Tools"},
   "plugins": [
-    {"name": "local-gpu", "source": "./plugin", "description": "Call approved local ComfyUI workflows over Tailscale."}
+    {"name": "local-gpu", "source": "./plugin", "description": "Local ComfyUI, Godot, Blender and VRoid tools over Tailscale."}
   ]
 }

@@ -62,6 +62,12 @@ BLENDER_TOOLS = NATIVE_COMMON + [
          {'project_id':STR,'operation':{'type':'string','enum':['scene_info','open','save','import_asset','export_asset','create_primitive','set_transform','set_material','set_camera','delete_object','render','execute_code','run_script']},'arguments':{'type':'object'},'request_id':STR},['project_id','operation'],False)
 ]
 
+VROID_TOOLS = NATIVE_COMMON[:6] + [
+    tool('vroid_tools','List supported VRoid operations and their argument fields. VRoid Studio uses a managed local editor; VRM export is not available in the upstream adapter.'),
+    tool('vroid_operation','Control local VRoid Studio: create/open characters, face/body/hair/outfit presets, sliders and colors, camera, preview-only screenshots, and save .vroid. First read vroid_tools; use help for details. open/save paths are relative to an approved project. save requires path; replace=true allows overwrite. main_menu requires discard_changes=true after saving. screenshot/previews only mode=inline. Text metadata is filtered; images contain only the model preview. No shell, raw commands or whole-window screenshots. A timed-out edit may still be running: query status before repeating.',
+         {'project_id':STR,'operation':{'type':'string','enum':['state','status','sections','create','open','save','categories','enter','presets','select_preset','set_param','camera','screenshot','preset_preview_list','preset_preview_range','main_menu','help']},'arguments':{'type':'object'}},['project_id','operation'],False)
+]
+
 def source_file_allowed(relative):
     path=pathlib.PurePosixPath(relative)
     deny={'.git','.godot','.svn','node_modules','__pycache__','.ssh','.codex','.claude','.agent_bridge','saves'}
@@ -103,7 +109,7 @@ class Client:
         request = urllib.request.Request(self.base+route, data=None if body is None else json.dumps(body).encode(),
             headers={'Authorization': 'Bearer '+self.token, 'Content-Type': 'application/json'})
         try:
-            response = self.opener.open(request, timeout=90 if stream or body is not None else 20)
+            response = self.opener.open(request, timeout=300 if route=='/v1/vroid/call' else 90 if stream or body is not None else 20)
             if stream: return response
             with response: return json.load(response)
         except urllib.error.HTTPError as error:
@@ -116,6 +122,8 @@ class Client:
         except (urllib.error.URLError, TimeoutError):
             raise ValueError('The local GPU computer is unreachable. Check that this computer, Tailscale and Local GPU Bridge are running; keep the same request_id when retrying a submission.') from None
     def call(self, name, args):
+        if name=='vroid_tools':return self.request('/v1/vroid/tools')
+        if name=='vroid_operation':return self.request('/v1/vroid/call',args)
         if name=='local_projects':return self.request('/v1/native/projects')
         if name=='local_status':return self.request('/v1/native/status')
         if name=='project_files':return self.request('/v1/native/files',args)
@@ -236,7 +244,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.4.1'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.5.0'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and backed up before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools}
@@ -246,7 +254,7 @@ def serve(client,tools=None):
                 try:
                     args = params.get('arguments') or {}; check_args(definition,args)
                     value = client.call(definition['name'],args)
-                    result = {'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}], 'isError':False}
+                    result = value if definition['name']=='vroid_operation' else {'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}], 'isError':False}
                 except Exception as error:
                     result = {'content':[{'type':'text','text':str(error)[:2400]}], 'isError':True}
             else:
@@ -257,12 +265,12 @@ def serve(client,tools=None):
             print(json.dumps({'jsonrpc':'2.0','id':ident,'error':{'code':-32600,'message':'Invalid request'}}),flush=True)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender'],default='comfyui');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid'],default='comfyui');args=parser.parse_args()
     try:
         client=Client(args.config)
         if args.self_test:
             print(json.dumps({'status':client.call('gpu_status',{}),'catalog':client.call('list_workflows',{})},ensure_ascii=False));return
-        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS}[args.namespace])
+        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS,'vroid':VROID_TOOLS}[args.namespace])
     except Exception as error:
         print('Local GPU plugin: '+str(error)[:500],file=sys.stderr);sys.exit(1)
 

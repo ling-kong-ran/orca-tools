@@ -34,7 +34,7 @@ class EgressGuard:
         if not self.ready(engine):raise ValueError('Native network isolation is not ready. Complete the local firewall setup from the management page first.')
 
 class ManagedProcess:
-    def __init__(self,args,cwd,log,env=None):
+    def __init__(self,args,cwd,log,env=None,show_window=False):
         if os.name!='nt':raise ValueError('Native rendering currently requires Windows.')
         kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         kernel.CreateJobObjectW.restype=w.HANDLE;kernel.CreateJobObjectW.argtypes=[ctypes.c_void_p,w.LPCWSTR]
@@ -49,7 +49,7 @@ class ManagedProcess:
             if job:kernel.CloseHandle(job)
             raise ValueError('Could not create the isolated native process job.')
         self.kernel=kernel;self.job=job;self.output=open(log,'ab',buffering=0)
-        startup=subprocess.STARTUPINFO();startup.dwFlags|=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
+        startup=subprocess.STARTUPINFO();startup.dwFlags|=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=4 if show_window else 0
         clean={k:v for k,v in os.environ.items() if not any(t in k.upper() for t in ('TOKEN','SECRET','API_KEY','CREDENTIAL','PASSWORD','ORCA_','CLAUDE_'))}
         clean.update(env or {});clean['PYTHONNOUSERSITE']='1';clean.pop('PYTHONPATH',None)
         try:
@@ -63,6 +63,19 @@ class ManagedProcess:
             if hasattr(self,'process'):self.process.kill();self.process.wait(timeout=5)
             self.close();raise ValueError('The contained native application could not start.') from None
     def poll(self):return self.process.poll()
+    def show_without_focus(self):
+        # Only restore top-level windows owned by this managed editor process.
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        callback=ctypes.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)
+        user32.GetWindowThreadProcessId.argtypes=[w.HWND,ctypes.POINTER(w.DWORD)]
+        user32.ShowWindowAsync.argtypes=[w.HWND,ctypes.c_int]
+        @callback
+        def restore(window,_):
+            owner=w.DWORD();user32.GetWindowThreadProcessId(window,ctypes.byref(owner))
+            if owner.value==self.process.pid:user32.ShowWindowAsync(window,4)
+            return True
+        user32.EnumWindows.argtypes=[callback,w.LPARAM]
+        user32.EnumWindows(restore,0)
     def wait(self,timeout=None):return self.process.wait(timeout)
     def stop(self):
         if self.job:self.kernel.TerminateJobObject(self.job,1)
