@@ -273,7 +273,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.6.0'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.6.1'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and backed up before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools}

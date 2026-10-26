@@ -1,5 +1,5 @@
 """Read locally configured workflow folders. Never expose their paths or graphs."""
-import copy, hashlib, json, pathlib, re, threading, time
+import copy, hashlib, json, logging, pathlib, re, threading, time
 
 class ConversionError(ValueError):
     pass
@@ -58,11 +58,26 @@ def editor_to_prompt(workflow, schemas):
     """Resolve saved widgets, links, bypasses and nested subgraph boundaries."""
     definitions = {g['id']:g for g in workflow.get('definitions',{}).get('subgraphs',[])}
     output = {}; random_seeds = set()
+    unconnected = object()
+    def clone(value): return unconnected if value is unconnected else copy.deepcopy(value)
+    def boundary_values(node, definition):
+        # New frontend versions omit widget-only sockets from the parent node's
+        # inputs array. Boundary indices belong to definition.inputs, not to that
+        # shorter array. Named saved widgets also include those hidden sockets.
+        for key in ('widgets_values_named', 'widgets_values'):
+            if isinstance(node.get(key), dict): return copy.deepcopy(node[key])
+        values = node.get('widgets_values') or []
+        names = [field['name'] for field in definition.get('inputs', [])
+                 if field.get('type') in ('STRING','INT','FLOAT','BOOLEAN','COMBO')]
+        if len(values) != len(names):
+            raise ConversionError('This subgraph widget layout needs named saved values or an API-format export.')
+        return dict(zip(names, copy.deepcopy(values)))
     def expand(graph, prefix='', boundary=None, stack=()):
         nodes = {str(n['id']):n for n in graph.get('nodes',[])}
         links = links_for(graph); nested = {}; resolving = set(); built = set()
         input_id = str(graph.get('inputNode',{}).get('id',-10))
         def read_input(node, slot):
+            if not 0 <= slot < len(node.get('inputs', [])): raise ConversionError('A workflow input slot is missing.')
             field = node.get('inputs',[])[slot]
             if field.get('link') is not None:
                 link = links.get(str(field['link']))
@@ -72,13 +87,25 @@ def editor_to_prompt(workflow, schemas):
             name = field.get('widget',{}).get('name',field['name'])
             if name not in values: raise ConversionError('A subgraph input value is missing.')
             return copy.deepcopy(values[name])
+        def read_boundary(node, definition, slot):
+            fields = definition.get('inputs')
+            # Compatibility with old saved subgraphs without input definitions.
+            if fields is None: return read_input(node, slot)
+            if not 0 <= slot < len(fields): raise ConversionError('A subgraph boundary input is missing.')
+            name = fields[slot]['name']
+            matches = [i for i,field in enumerate(node.get('inputs', [])) if field.get('name') == name]
+            if len(matches) > 1: raise ConversionError('A subgraph boundary name is ambiguous.')
+            if matches and node['inputs'][matches[0]].get('link') is not None:
+                return read_input(node, matches[0])
+            values = boundary_values(node, definition)
+            return copy.deepcopy(values[name]) if name in values else unconnected
         def resolve(node_id, slot):
             key = (node_id,slot)
             if key in resolving: raise ConversionError('A workflow link contains a cycle.')
             resolving.add(key)
             try:
                 if node_id == input_id and boundary is not None:
-                    return copy.deepcopy(boundary(slot))
+                    return clone(boundary(slot))
                 node = nodes.get(node_id)
                 if not node: raise ConversionError('A linked node is missing.')
                 kind = node['type']; mode = node.get('mode',0)
@@ -98,7 +125,7 @@ def editor_to_prompt(workflow, schemas):
                 if kind in definitions:
                     if node_id not in nested:
                         if kind in stack or len(stack)>12: raise ConversionError('Recursive subgraphs are unsupported.')
-                        nested[node_id] = expand(definitions[kind],prefix+node_id+':',lambda i:read_input(node,i),stack+(kind,))
+                        nested[node_id] = expand(definitions[kind],prefix+node_id+':',lambda i:read_boundary(node,definitions[kind],i),stack+(kind,))
                     return nested[node_id](slot)
                 build(node_id)
                 return [prefix+node_id,slot]
@@ -114,7 +141,15 @@ def editor_to_prompt(workflow, schemas):
                 if root in fields: inputs[name] = value
             # Autogrow/dynamic inputs use dotted names, matching frontend API serialization.
             for i,field in enumerate(node.get('inputs',[])):
-                if field.get('link') is not None: inputs[field['name']] = read_input(node,i)
+                if field.get('link') is not None:
+                    value = read_input(node,i)
+                    if value is unconnected:
+                        # Optional disconnected boundary inputs are absent from
+                        # API prompts, not null. Required ones must fail clearly.
+                        if field['name'] in schema.get('input',{}).get('required',{}):
+                            raise ConversionError('A required subgraph input is not connected.')
+                        inputs.pop(field['name'], None)
+                    else: inputs[field['name']] = value
             for name,spec in fields.items():
                 options = spec[1] if len(spec)>1 and isinstance(spec[1],dict) else {}
                 if options.get('control_after_generate'):
@@ -127,7 +162,7 @@ def editor_to_prompt(workflow, schemas):
             if node['type'] in definitions:
                 # Inner output nodes without a parent connection still need execution.
                 if not any(s.get('links') for s in node.get('outputs',[])):
-                    expand(definitions[node['type']],prefix+node_id+':',lambda i:read_input(node,i),stack+(node['type'],))
+                    expand(definitions[node['type']],prefix+node_id+':',lambda i:read_boundary(node,definitions[node['type']],i),stack+(node['type'],))
             elif schemas.get(node['type'],{}).get('output_node'): build(node_id)
         def resolve_output(slot):
             output_id = str(graph.get('outputNode',{}).get('id',-20))
@@ -152,12 +187,16 @@ def exposed_parameters(prompt, schemas):
             tts = node['class_type'].startswith('FB_Qwen3TTS')
             tts_text = tts and name in ('instruct','target_text')
             tts_choice = tts and name in ('language','speaker')
+            primitive_text = node['class_type'] in ('PrimitiveString','PrimitiveStringMultiline') and name == 'value'
             asset = name in ASSET_FIELDS and node['class_type'].startswith(('Load','VHS_Load'))
             if not asset and PRIVATE_FIELDS.search(name): continue
-            if isinstance(value,str) and name not in TEXT_FIELDS and name not in ('sampler_name','scheduler') and not asset and not tts_text and not tts_choice: continue
+            if isinstance(value,str) and name not in TEXT_FIELDS and name not in ('sampler_name','scheduler') and not asset and not tts_text and not tts_choice and not primitive_text: continue
             spec = {'node':node_id,'input':name,'type':{str:'string',int:'integer',float:'number',bool:'boolean'}[type(value)]}
             definition = fields.get(name,[]); options = definition[1] if len(definition)>1 and isinstance(definition[1],dict) else {}
-            if isinstance(value,str): spec['maxLength'] = 32000 if name in TEXT_FIELDS or tts_text else 300
+            # JSON serializes whole-valued FLOAT widgets as integers (e.g. 1 MP).
+            # Their public schema must still accept fractional values.
+            if definition and definition[0] == 'FLOAT' and type(value) in (int,float): spec['type'] = 'number'
+            if isinstance(value,str): spec['maxLength'] = 32000 if name in TEXT_FIELDS or tts_text or primitive_text else 300
             if asset: spec['asset'] = True
             if type(value) in (int,float):
                 for source,target in (('min','minimum'),('max','maximum')):
@@ -225,6 +264,9 @@ class WorkflowLibrary:
                         self.cache={k:v for k,v in self.cache.items() if k[0]!=str(file)}
                         self.cache[key]=copy.deepcopy(item)
                     except ConversionError as e:item.update(available=False,unavailable_reason=str(e));item.pop('prompt',None)
-                    except (ValueError,KeyError,TypeError,IndexError,OSError):item['unavailable_reason']='This saved workflow could not be read or converted. Check the local workflow page.'
+                    except (ValueError,KeyError,TypeError,IndexError,OSError):
+                        logging.exception('Saved workflow conversion failed: %s', file)
+                        item.update(available=False,unavailable_reason='This saved workflow could not be read or converted. Check the local workflow page.')
+                        item.pop('prompt',None)
                     result.append(item)
             return result

@@ -60,6 +60,49 @@ class Tests(unittest.TestCase):
   prompt,_=editor_to_prompt(graph,SCHEMAS);self.assertEqual(prompt['2']['inputs']['value'],['1',0])
   graph['nodes'][1].update(type='UninstalledBypass',mode=4)
   prompt,_=editor_to_prompt(graph,SCHEMAS);self.assertEqual(prompt['2']['inputs']['value'],['1',0])
+ def test_subgraph_hidden_widgets_and_optional_unconnected_socket(self):
+  schemas={**SCHEMAS,'Source':{'input':{'required':{'text':['STRING',{}],'seed':['INT',{}]},'optional':{'image':['IMAGE']}},'output_node':False}}
+  sub={'id':'group','inputs':[{'name':'text','type':'STRING'},{'name':'seed','type':'INT'},{'name':'image','type':'IMAGE'}],
+       'inputNode':{'id':-10},'outputNode':{'id':-20},
+       'nodes':[{'id':1,'type':'Source','widgets_values_named':{'text':'inner','seed':0},
+                 'inputs':[{'name':'text','link':10},{'name':'seed','link':11},{'name':'image','link':12}]}],
+       'links':[[10,-10,0,1,0],[11,-10,1,1,1],[12,-10,2,1,2],[13,1,0,-20,0]]}
+  parent={'id':7,'type':'group','inputs':[{'name':'text','link':None},{'name':'image','link':None}],
+          'widgets_values_named':{'text':'outer','seed':987}}
+  graph={'definitions':{'subgraphs':[sub]},'nodes':[parent,{'id':8,'type':'Save','inputs':[{'name':'value','link':1}],'widgets_values':['out']}],
+         'links':[[1,7,0,8,0]]}
+  prompt,_=editor_to_prompt(graph,schemas)
+  self.assertEqual(prompt['7:1']['inputs'],{'text':'outer','seed':987})
+  parent.pop('widgets_values_named');parent['widgets_values']=['positional',456]
+  prompt,_=editor_to_prompt(graph,schemas)
+  self.assertEqual(prompt['7:1']['inputs'],{'text':'positional','seed':456})
+  # A missing required value cannot become null or silently inherit an inner default.
+  parent['widgets_values_named']={'text':'only'}
+  with self.assertRaisesRegex(ConversionError,'required subgraph'):editor_to_prompt(graph,schemas)
+ def test_subgraph_reordered_connected_input_resolves_by_name(self):
+  sub={'id':'group','inputs':[{'name':'caption','type':'STRING'},{'name':'seed','type':'INT'}],
+       'inputNode':{'id':-10},'outputNode':{'id':-20},
+       'nodes':[{'id':1,'type':'Source','widgets_values_named':{'text':'inner','seed':0,'device':'cuda'},'inputs':[{'name':'text','link':10},{'name':'seed','link':11}]}],
+       'links':[[10,-10,0,1,0],[11,-10,1,1,1],[12,1,0,-20,0]]}
+  graph={'definitions':{'subgraphs':[sub]},'nodes':[
+   {'id':5,'type':'PrimitiveNode','widgets_values':[123]},
+   {'id':7,'type':'group','widgets_values_named':{'caption':'outer'},'inputs':[{'name':'seed','link':2},{'name':'caption','link':None}]},
+   {'id':8,'type':'Save','inputs':[{'name':'value','link':1}],'widgets_values':['out']}],
+   'links':[[1,7,0,8,0],[2,5,0,7,0]]}
+  prompt,_=editor_to_prompt(graph,SCHEMAS)
+  self.assertEqual(prompt['7:1']['inputs']['text'],'outer');self.assertEqual(prompt['7:1']['inputs']['seed'],123)
+ def test_primitive_prompt_can_be_edited_without_exposing_model_fields(self):
+  prompt={'1':{'class_type':'PrimitiveStringMultiline','inputs':{'value':'hello'}},
+          '2':{'class_type':'UNETLoader','inputs':{'unet_name':'private.safetensors'}}}
+  params=exposed_parameters(prompt,{})
+  self.assertEqual(set(params),{'value_1'});self.assertEqual(params['value_1']['maxLength'],32000)
+ def test_float_widget_saved_as_integer_still_accepts_fractional_override(self):
+  prompt={'1':{'class_type':'Resolution','inputs':{'megapixels':1}}}
+  schemas={'Resolution':{'input':{'required':{'megapixels':['FLOAT',{'min':0.1,'max':16}]}}}}
+  params=exposed_parameters(prompt,schemas)
+  self.assertEqual(params['megapixels_1']['type'],'number')
+  changed=apply_parameters({'prompt':prompt,'parameters':params},{'megapixels_1':0.1})
+  self.assertEqual(changed['1']['inputs']['megapixels'],0.1)
  def test_unknown_active_and_custom_widgets_fail(self):
   graph=workflow();graph['nodes'][0]['type']='Missing'
   with self.assertRaises(ConversionError):editor_to_prompt(graph,SCHEMAS)

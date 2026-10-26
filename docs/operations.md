@@ -144,3 +144,9 @@ Git、Godot、Blender 和 ComfyUI 提交任务时均可复用原来的32位 requ
 ComfyUI 的 Windows 输出子目录会转为标准相对路径；保留绝对路径和目录越界拒绝规则。历史成功但产物列表为空的任务，可通过 job_status 从现有 ComfyUI history 恢复，不重新生成。
 
 MCP 1.4.1 的 fetch_artifact、fetch_native_artifact、download_project_file 都在传输完成后按接收 VPS 的系统时钟设置访问/修改时间，并在回执返回带时区偏移的 saved_at、timezone、timestamp_source=receiver。不沿用 Windows 发送端时间，也不手工平移 Unix 时间戳。显示时区仍由文件浏览器决定。升级本机桥接即可恢复产物识别；下载回执与时间策略位于 VPS 客户端，更新已安装插件后在现有 Claude 会话执行 /reload-plugins，或新建会话。
+
+## 工作流转换与渲染前 Git 错误
+
+MOSS 等新版 ComfyUI 子工作流会把部分控件保存在 `widgets_values_named` 中，却不放进父节点的 `inputs` 数组。子图插槽序号属于子图定义，不能直接作为父节点输入下标。1.6.1 按定义中的输入名称解析连接及保存值，并省略未连接的可选图片输入；文本 primitive 的 value 也可作为提示词编辑。FLOAT 控件即使在 JSON 中保存为整数，仍允许小数参数。修复不需要改写原工作流，也不需要重新下载模型。转换异常的详细信息只记到本机日志。
+
+Blender 的 `execute_code`、`run_script`、打开场景和渲染可能先触发项目的自动 Git 拉取。若日志显示 fetch 失败，脚本尚未执行；换成一行脚本也无效。1.6.1 返回 `error_stage: git_sync` 及明确提示，继续保留原同步策略。先验证现有 SOCKS 端口确实能传输 GitHub SSH；同一个代理能打开网页，并不保证 SSH 可用。可切换到已验证的 SSH SOCKS 隧道，仍保留严格主机密钥检查。修复后重新提交任务；历史失败记录不自动改成成功。

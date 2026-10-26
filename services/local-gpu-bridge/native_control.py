@@ -275,7 +275,7 @@ class NativeControl:
             state.update({f['path']:f['sha256'] for f in plan['files']});atomic(state_file,state)
             plan['status']='applied';atomic(self.root/'plans'/(ident+'.json'),plan)
             return self.public_plan(plan)
-    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','artifacts','attempt','retry_of') if k in job})
+    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','error_stage','artifacts','attempt','retry_of') if k in job})
     def save_job(self,job):job['updated_at']=time.time();atomic(self.root/'jobs'/(job['id']+'.json'),job)
     def project_git(self,project_id,operation='status',request_id=None):
         project,root=self.project(project_id)
@@ -351,6 +351,7 @@ class NativeControl:
         if 'replace' in args and type(args['replace'])is not bool:raise ValueError('replace must be boolean.')
     def run(self,job):
         with self.execute_lock:
+            stage='operation'
             try:
                 project,root=self.project(job['project_id'])
                 if job['engine']!='git':self.guard.require(job['engine'])
@@ -358,14 +359,17 @@ class NativeControl:
                 output_dir=self.root/'artifacts';output_dir.mkdir(exist_ok=True)
                 git_update=None
                 if job['engine']=='git':
+                    stage='git_sync'
                     from native_git import git_for
                     git=git_for(self,project,root)
                     job['result']=git.pull(job['id']) if job['operation']=='pull' else {'fetched':True,'head':git.fetch()}
                     with self.lock:job['status']='succeeded';self.save_job(job)
                     return
                 if project.get('git',{}).get('enabled') and project['git'].get('auto_pull_before_render') and (job['engine']=='godot' or job['operation'] in ('open','execute_code','run_script','render')):
+                    stage='git_sync'
                     from native_git import git_for
                     git_update=git_for(self,project,root).pull(job['id'])
+                    stage='operation'
                 if job['engine']=='blender' and job['operation'] in ('run_script','execute_code') and not project.get('allow_scripts'):raise ValueError('Project script access is disabled.')
                 if job['engine']=='godot' and job['operation']=='script':
                     from native_script import run_script
@@ -379,7 +383,11 @@ class NativeControl:
                 with self.lock:job['status']='succeeded';self.save_job(job)
             except Exception:
                 import logging;logging.exception('Native task failed')
-                with self.lock:job['status']='failed';job['error']='Native operation failed. Check the local management page and application log.';self.save_job(job)
+                with self.lock:
+                    job['status']='failed'
+                    job['error']='Project Git synchronization failed before the native operation started. Check the local Git connection and proxy, then retry.' if stage=='git_sync' else 'Native operation failed. Check the local management page and application log.'
+                    job['error_stage']=stage
+                    self.save_job(job)
     def import_godot(self,job,project,root):
         client=inside(root,project.get('godot_subdir','client'));folder=self.root/'runs'/job['id'];folder.mkdir(parents=True,exist_ok=True)
         executable=self.config['native']['godot_executable']

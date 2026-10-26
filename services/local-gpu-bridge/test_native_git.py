@@ -72,5 +72,20 @@ class GitTests(unittest.TestCase):
   deadline=time.monotonic()+20
   while control.jobs[job['id']]['status'] in ('queued','running') and time.monotonic()<deadline:time.sleep(.05)
   result=control.job_status(job['id']);self.assertEqual(result['status'],'succeeded');self.assertTrue(result['result']['git_update']['updated'])
+ def test_git_failure_is_distinct_and_does_not_run_blender_code(self):
+  project=dict(self.project,name='Fixture',allow_scripts=True)
+  class Ready:
+   def ready(self,engine):return True
+   def require(self,engine):pass
+  control=NativeControl({'data_dir':str(self.root/'failed-service'),'native':{'projects':[project]}},guard=Ready())
+  job={'id':uuid.uuid4().hex,'project_id':'fixture','engine':'blender','operation':'execute_code',
+       'arguments':{'code':'result=1'},'status':'queued','artifacts':[]}
+  control.jobs[job['id']]=job
+  with patch('native_git.ProjectGit.pull',side_effect=ValueError('private host detail')),patch.object(control,'run_blender') as blender:
+   with self.assertLogs(level='ERROR'):control.run(job)
+   blender.assert_not_called()
+  result=control.job_status(job['id'])
+  self.assertEqual(result['error_stage'],'git_sync');self.assertIn('before the native operation',result['error'])
+  self.assertNotIn('private host',json.dumps(result))
 
 if __name__=='__main__':unittest.main(verbosity=2)
