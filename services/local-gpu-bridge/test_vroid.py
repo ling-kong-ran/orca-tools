@@ -31,6 +31,33 @@ class VroidTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.control.call('disabled', 'state')
         self.assertEqual(self.control.validate(self.project, 'main_menu', {'discard_changes': True}), {})
 
+    def test_export_is_project_scoped_and_requires_explicit_metadata_and_overwrite(self):
+        args = {'path': 'avatar.vrm', 'title': 'Avatar', 'author': 'Artist'}
+        result = self.control.validate(self.project, 'export_vrm', args)
+        self.assertEqual(result['format'], '1.0')
+        self.assertEqual(result['path'], str(self.project/'avatar.vrm'))
+        for bad in ({'path': '../outside.vrm'}, {'path': 'avatar.vroid'}, {'format': '2.0'},
+                    {'title': ''}, {'author': 'a\ncontact'}, {'title': 'a'*201}, {'replace': 'true'}):
+            with self.assertRaises(ValueError): self.control.validate(self.project, 'export_vrm', {**args, **bad})
+        (self.project/'avatar.vrm').write_bytes(b'old')
+        with self.assertRaisesRegex(ValueError, 'replace=true'):
+            self.control.validate(self.project, 'export_vrm', args)
+        self.assertTrue(self.control.validate(self.project, 'export_vrm', {**args, 'replace': True})['replace'])
+
+    def test_export_checks_container_and_returns_only_relative_file_receipt(self):
+        args = {'path': 'avatar.vrm', 'title': 'Avatar', 'author': 'Artist'}
+        reply = {'content': [{'type': 'text', 'text': '{"saved":true}'}]}
+        with unittest.mock.patch.object(self.control, 'ensure_started'), unittest.mock.patch.object(self.control, 'rpc', return_value=reply) as rpc:
+            with self.assertRaisesRegex(ValueError, 'produce'): self.control.call('test', 'export_vrm', args)
+            (self.project/'avatar.vrm').write_bytes(b'corrupt')
+            args['replace'] = True
+            with self.assertRaisesRegex(ValueError, 'invalid'): self.control.call('test', 'export_vrm', args)
+            (self.project/'avatar.vrm').write_bytes(struct.pack('<4sII', b'glTF', 2, 20)+b'12345678')
+            result = json.loads(self.control.call('test', 'export_vrm', args)['content'][0]['text'])
+            self.assertEqual(result, {'saved': True, 'path': 'avatar.vrm', 'format': '1.0', 'bytes': 20})
+            self.assertNotIn(str(self.root), json.dumps(result))
+            self.assertEqual(rpc.call_args.kwargs['timeout'], 285)
+
     def test_parameter_paths_use_the_upstream_index_string_argument(self):
         args = {'section': 'Face', 'category': 'Irises', 'path': 'Face/Irises/Both Eyes', 'value': '#33AA77'}
         value = self.control.validate(self.project, 'set_param', args)

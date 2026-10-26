@@ -1,6 +1,6 @@
 ---
 name: vroid
-description: Create and edit local VRoid Studio characters through the project-scoped vroid-local MCP tools, inspect model previews and save .vroid projects.
+description: Create and edit local VRoid Studio characters through the project-scoped vroid-local MCP tools, inspect model previews, save .vroid projects and export VRM avatars.
 ---
 
 Use vroid-local, not shell or raw TCP. Start with vroid_tools and local_projects. The managed Studio instance starts on first operation; its first bootstrap can take several minutes. Network isolation must be ready.
@@ -13,6 +13,6 @@ open/save require project-relative .vroid paths; save always needs path and repl
 
 Mutation calls block while the model rebuilds. A timeout can mean the operation is still running: query status before repeating. Never poll screenshot during rebuilds. Do not query host identity, hardware or network information. No batch, UI screenshot, shell, raw protocol or diagnostic bypass is available.
 
-Upstream 1.0.0 does not expose VRM export. Do not invent an export operation or claim a .vroid save is a VRM export. VRM files exported by Studio can be edited/rendered with Blender and its separately installed VRM Add-on. Local rendering is on the PC; do not install another VRoid Studio on the VPS.
+Toolkit 1.6 adds export_vrm through its Studio extension. Call vroid_operation(export_vrm) with {path: project-relative .vrm, format: "1.0" (default) or "0.0", title: model title, author: artist name, replace?:boolean}. The folder must exist; overwriting requires replace=true. This invokes Studio native export, waits for the completed file and returns to editing without a file dialog. Save the .vroid separately to preserve editable source. Metadata uses restrictive rights and fresh title/author without local contact details; preserve any source asset license obligations. Fetch the .vrm with download_project_file or import it directly using Blender import_asset. If the local Studio extension is missing, run scripts/install-vroid-export.py on the PC, not on the VPS. Do not ask the user to manually export when the installed export_vrm is available. Local rendering is on the PC; do not install another VRoid Studio on the VPS.
 
 Blender VRM support: check blender_operation(scene_info). Its capabilities.vrm_import/vrm_export indicate installed operator support, including in the factory-startup managed instance. Use import_asset/export_asset with project-relative .vrm paths, or Blender Python. Preserve the model metadata/license requirements. This is separate from exporting the initial .vrm from VRoid Studio; never ask to reinstall VRoid MCP as a substitute for the Blender VRM extension.

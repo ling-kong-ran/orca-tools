@@ -5,6 +5,7 @@ from native_control import inside, private_result, private_text
 FIELDS = {
     'state': set(), 'status': set(), 'sections': set(),
     'create': {'gender'}, 'open': {'path'}, 'save': {'path', 'replace'},
+    'export_vrm': {'path', 'format', 'title', 'author', 'replace'},
     'categories': {'section'}, 'enter': {'section', 'category', 'view'},
     'presets': {'section', 'category'},
     'select_preset': {'section', 'category', 'index', 'params'},
@@ -107,15 +108,24 @@ class VroidControl:
                 raise ValueError('Invalid VRoid parameter selector.')
             # Upstream calls the selector "index", even when it is a stable path.
             args['index'] = str(selector)
-        if operation in ('open', 'save'):
+        if operation in ('open', 'save', 'export_vrm'):
             file = inside(root, args.get('path'))
-            if file.suffix.lower() != '.vroid': raise ValueError('Use a project-relative .vroid file.')
+            suffix = '.vrm' if operation == 'export_vrm' else '.vroid'
+            if file.suffix.lower() != suffix: raise ValueError('Use a project-relative '+suffix+' file.')
             if operation == 'open' and not file.is_file(): raise ValueError('VRoid project file is unavailable.')
-            if operation == 'save':
+            if operation in ('save', 'export_vrm'):
                 if 'replace' in args and type(args['replace']) is not bool: raise ValueError('replace must be boolean.')
                 if file.exists() and args.get('replace') is not True: raise ValueError('File exists; replace=true is required.')
                 if not file.parent.is_dir(): raise ValueError('Create the destination folder through the project first.')
-            args.pop('replace', None); args['path'] = str(file)
+            if operation != 'export_vrm': args.pop('replace', None)
+            args['path'] = str(file)
+        if operation == 'export_vrm':
+            if args.get('format', '1.0') not in ('1.0', '0.0'): raise ValueError('VRM format must be 1.0 or 0.0.')
+            args['format'] = args.get('format', '1.0')
+            for field in ('title', 'author'):
+                value = args.get(field)
+                if not isinstance(value, str) or not value.strip() or len(value) > 200 or any(ord(c) < 32 for c in value):
+                    raise ValueError('VRM '+field+' must be 1 to 200 printable characters.')
         if operation == 'main_menu':
             if args.get('discard_changes') is not True: raise ValueError('Save first, then explicitly set discard_changes=true to leave the model.')
             args = {}
@@ -131,10 +141,10 @@ class VroidControl:
         return args
 
     def tools(self):
-        return {'operations': sorted(FIELDS), 'paths': 'open/save require project-relative .vroid paths; save requires an explicit path and replace=true for existing files.',
+        return {'operations': sorted(FIELDS), 'paths': 'open/save require project-relative .vroid paths; export_vrm requires .vrm. Writes require an explicit path and replace=true for existing files.',
                 'arguments': {key: sorted(value) for key, value in FIELDS.items()},
-                'workflow': 'state; create(gender=female|male) or open(path); categories(section); presets/enter(section,category); select_preset(index)/set_param(value); camera; screenshot; save(path). Sections and categories are case-sensitive. Use help for editor semantics.',
-                'limitations': ['No VRM export API in upstream 1.0.0.', 'No shell, batch/raw protocol, full-window screenshots or diagnostic tools.']}
+                'workflow': 'state; create(gender=female|male) or open(path); categories(section); presets/enter(section,category); select_preset(index)/set_param(value); camera; screenshot; save(path); export_vrm(path,format=1.0|0.0,title,author). Export returns to editing. Download the .vrm with download_project_file or import it with Blender import_asset. Sections and categories are case-sensitive. Use help for editor semantics.',
+                'limitations': ['export_vrm requires the Toolkit Studio export extension, installed with scripts/install-vroid-export.py. Metadata uses restrictive license defaults and explicit title/author; saved local contact details are not copied.', 'No shell, batch/raw protocol, full-window screenshots or diagnostic tools.']}
 
     def call(self, project_id, operation, arguments=None):
         _, root = self.native.project(project_id)
@@ -147,9 +157,22 @@ class VroidControl:
             if operation == 'status': result = self.rpc('tools/call', {'name': operation, 'arguments': args}, timeout=10)
             else:
                 if not self.lock.acquire(blocking=False): raise ValueError('VRoid is busy. Query status before submitting another edit.')
-                try: result = self.rpc('tools/call', {'name': operation, 'arguments': args})
+                try:
+                    if operation == 'export_vrm':
+                        result = self.rpc('tools/call', {'name': operation, 'arguments': args}, timeout=285)
+                    else: result = self.rpc('tools/call', {'name': operation, 'arguments': args})
                 finally: self.lock.release()
-            return self.filtered(result)
+            filtered = self.filtered(result)
+            if operation == 'export_vrm' and not filtered['isError']:
+                # Return a usable relative path, never the Windows absolute path.
+                file = inside(root, arguments['path'])
+                if not file.is_file(): raise ValueError('VRM export did not produce a project file.')
+                with file.open('rb') as source: header = source.read(12)
+                if len(header) != 12 or struct.unpack('<4sII', header) != (b'glTF', 2, file.stat().st_size):
+                    raise ValueError('VRM export produced an invalid container.')
+                filtered['content'] = [{'type': 'text', 'text': json.dumps({'saved': True,
+                    'path': file.relative_to(root).as_posix(), 'format': args['format'], 'bytes': file.stat().st_size})}]
+            return filtered
         except ValueError: raise
         except Exception:
             logging.exception('VRoid operation failed')
