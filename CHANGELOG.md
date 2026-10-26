@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-27 — VRoid 编辑器与角色状态 / MCP 1.5.1
+
+- 区分编辑器连通状态和角色模型就绪状态，避免将主菜单的 ready=false 误判为仍在启动。
+- state 返回 editor_connected、model_ready、phase 和明确的下一步操作；awaiting_model 应新建或打开角色，无需空等。
+- 更新工具说明和 skill；客户端升级即可生效，不重启本机编辑器或 GPU 服务。
+
 ## 2026-10-27 — VRoid Studio / MCP 1.5.0
 
 - 在现有 Toolkit GPU 模块加入 vroid-local：通过本机编辑器 API 新建/打开角色、预设和参数调整、镜头、预览与 .vroid 保存。

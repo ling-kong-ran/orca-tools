@@ -64,9 +64,38 @@ BLENDER_TOOLS = NATIVE_COMMON + [
 
 VROID_TOOLS = NATIVE_COMMON[:6] + [
     tool('vroid_tools','List supported VRoid operations and their argument fields. VRoid Studio uses a managed local editor; VRM export is not available in the upstream adapter.'),
-    tool('vroid_operation','Control local VRoid Studio: create/open characters, face/body/hair/outfit presets, sliders and colors, camera, preview-only screenshots, and save .vroid. First read vroid_tools; use help for details. open/save paths are relative to an approved project. save requires path; replace=true allows overwrite. main_menu requires discard_changes=true after saving. screenshot/previews only mode=inline. Text metadata is filtered; images contain only the model preview. No shell, raw commands or whole-window screenshots. A timed-out edit may still be running: query status before repeating.',
+    tool('vroid_operation','Control local VRoid Studio: create/open characters, face/body/hair/outfit presets, sliders and colors, camera, preview-only screenshots, and save .vroid. First read vroid_tools; use help for details. state reports editor_connected, model_ready and phase: awaiting_model means the editor is running WITHOUT an open character. Call create or open next; waiting cannot load a character. open/save paths are relative to an approved project. save requires path; replace=true allows overwrite. main_menu requires discard_changes=true after saving. screenshot/previews only mode=inline. Text metadata is filtered; images contain only the model preview. No shell, raw commands or whole-window screenshots. A timed-out edit may still be running: query status before repeating.',
          {'project_id':STR,'operation':{'type':'string','enum':['state','status','sections','create','open','save','categories','enter','presets','select_preset','set_param','camera','screenshot','preset_preview_list','preset_preview_range','main_menu','help']},'arguments':{'type':'object'}},['project_id','operation'],False)
 ]
+
+def vroid_state_result(result, operation):
+    if operation not in ('state','status') or result.get('isError'):return result
+    for item in result.get('content',[]):
+        if item.get('type')!='text':continue
+        try:value=json.loads(item.get('text',''))
+        except (TypeError,ValueError):continue
+        if not isinstance(value,dict):continue
+        if operation=='state' and type(value.get('ready'))is bool and type(value.get('in_edit'))is bool:
+            value['editor_connected']=True
+            value['model_ready']=value.pop('ready')
+            if value.get('updating'):
+                value['phase']='updating_model'
+                value['next_action']='Wait for the current model update; do not repeat its mutation.'
+            elif not value['in_edit']:
+                value['phase']='awaiting_model'
+                value['next_action']='The editor is running. No character is open. Call create(gender=female|male) or open(path) next. Do not wait for model_ready before creating/opening a character.'
+            elif value['model_ready']:
+                value['phase']='editing'
+                value['next_action']='The character is ready for editing, camera operations, previews and saving.'
+            else:
+                value['phase']='loading_model'
+                value['next_action']='A character is opening. Check status/state after a short delay; do not repeat open/create.'
+        elif operation=='status':
+            value['editor_connected']=True
+            value['next_action']='This is the command queue, not model readiness. Use state to decide whether to create/open a character. An empty queue does not mean the editor is still starting.'
+        else:continue
+        item['text']=json.dumps(value,ensure_ascii=False)
+    return result
 
 def source_file_allowed(relative):
     path=pathlib.PurePosixPath(relative)
@@ -123,7 +152,7 @@ class Client:
             raise ValueError('The local GPU computer is unreachable. Check that this computer, Tailscale and Local GPU Bridge are running; keep the same request_id when retrying a submission.') from None
     def call(self, name, args):
         if name=='vroid_tools':return self.request('/v1/vroid/tools')
-        if name=='vroid_operation':return self.request('/v1/vroid/call',args)
+        if name=='vroid_operation':return vroid_state_result(self.request('/v1/vroid/call',args),args['operation'])
         if name=='local_projects':return self.request('/v1/native/projects')
         if name=='local_status':return self.request('/v1/native/status')
         if name=='project_files':return self.request('/v1/native/files',args)
@@ -244,7 +273,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.5.0'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.5.1'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and backed up before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools}

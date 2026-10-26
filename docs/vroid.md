@@ -22,6 +22,8 @@ Update the remote plugin with the existing VPS installer or marketplace update, 
 
 Start with `vroid_tools` and `local_projects`, then call `vroid_operation(project_id, operation, arguments)`:
 
+MCP 1.5.1 distinguishes editor startup from character readiness. A successful `state` returns `editor_connected:true`. `phase:awaiting_model`, `in_edit:false` and `model_ready:false` mean Studio is running without an open character: call `create` or `open` next. Waiting will not load a model. `loading_model`/`updating_model` refer to a character operation; `editing` means the character is ready. `status` only reports the command queue.
+
 | Operation | Example arguments |
 | --- | --- |
 | state / status / sections | `{}` |

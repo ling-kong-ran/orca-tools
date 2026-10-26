@@ -87,4 +87,40 @@ class VroidTests(unittest.TestCase):
         self.assertFalse(result['isError'])
 
 
+class VroidStateTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('vroid_state_client', pathlib.Path(__file__).parent/'plugin/client.py')
+        self.module = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.module)
+        self.client = self.module.Client.__new__(self.module.Client)
+
+    def state(self, state):
+        reply = {'content': [{'type': 'text', 'text': json.dumps(state)}], 'isError': False}
+        with unittest.mock.patch.object(self.client, 'request', return_value=reply):
+            result = self.client.call('vroid_operation', {'project_id': 'test', 'operation': 'state'})
+        return json.loads(result['content'][0]['text'])
+
+    def test_running_editor_without_model_does_not_report_software_startup(self):
+        value = self.state({'ready': False, 'updating': False, 'selectors': 0, 'in_edit': False, 'section': None})
+        self.assertTrue(value['editor_connected']); self.assertFalse(value['model_ready'])
+        self.assertEqual(value['phase'], 'awaiting_model'); self.assertNotIn('ready', value)
+        self.assertIn('Call create', value['next_action']); self.assertIn('Do not wait', value['next_action'])
+
+    def test_loading_updating_and_ready_models_remain_distinct(self):
+        for ready, updating, expected in [(False, False, 'loading_model'), (False, True, 'updating_model'), (True, False, 'editing')]:
+            value = self.state({'ready': ready, 'updating': updating, 'in_edit': True, 'selectors': 4})
+            self.assertEqual(value['phase'], expected); self.assertEqual(value['model_ready'], ready)
+
+    def test_status_queue_does_not_claim_model_is_ready(self):
+        reply = {'content': [{'type': 'text', 'text': '{"queued":0}'}]}
+        result = self.module.vroid_state_result(reply, 'status')
+        value = json.loads(result['content'][0]['text'])
+        self.assertTrue(value['editor_connected']); self.assertNotIn('model_ready', value)
+        self.assertIn('Use state', value['next_action'])
+
+    def test_error_responses_are_not_relabelled_as_connected(self):
+        reply = {'content': [{'type': 'text', 'text': '{"ready":false,"in_edit":false}'}], 'isError': True}
+        result = self.module.vroid_state_result(reply, 'state')
+        self.assertNotIn('editor_connected', json.loads(result['content'][0]['text']))
+
+
 if __name__ == '__main__': unittest.main()

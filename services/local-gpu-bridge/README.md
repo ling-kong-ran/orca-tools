@@ -1,4 +1,4 @@
-# Local GPU Bridge 1.5.0
+# Local GPU Bridge 1.5.1
 
 Windows 私网 GPU 服务和 Linux Claude Code MCP 插件。
 
