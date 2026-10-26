@@ -1,5 +1,18 @@
 """MCP stdio client, runs on the VPS. Never logs the bridge credential."""
 import argparse, base64, hashlib, ipaddress, json, os, pathlib, re, socket, sys, urllib.error, urllib.parse, urllib.request, uuid, concurrent.futures
+from datetime import datetime
+
+
+def download_receipt(target, size, checksum):
+    # This client runs on the VPS: timestamp at completed receipt, not from the
+    # Windows sender. Unix mtimes are absolute instants; the ISO receipt includes
+    # the receiver's actual timezone so displays cannot mistake UTC for local time.
+    saved = datetime.now().astimezone()
+    timestamp = saved.timestamp()
+    os.utime(target, (timestamp, timestamp))
+    return {'path': str(target), 'bytes': size, 'sha256': checksum,
+            'saved_at': saved.isoformat(), 'timezone': str(saved.tzinfo),
+            'timestamp_source': 'receiver'}
 
 def user_home():
     # Orca gives each Claude account a separate HOME. Bridge config belongs to the OS user.
@@ -169,7 +182,7 @@ class Client:
                     candidate = target if attempt == 0 else target.with_name(target.stem+'-'+str(attempt)+target.suffix)
                     try: os.link(partial,candidate); target=candidate; break
                     except FileExistsError: attempt += 1
-                return {'path': str(target), 'bytes': size, 'sha256': digest.hexdigest()}
+                return download_receipt(target, size, digest.hexdigest())
             finally: partial.unlink(missing_ok=True)
         raise ValueError('Unknown tool: '+name)
 
@@ -196,7 +209,7 @@ class Client:
                 try:os.link(partial,target);break
                 except FileExistsError:continue
             else:raise ValueError('No unused output filename is available.')
-            return {'path':str(target),'bytes':size,'sha256':digest.hexdigest()}
+            return download_receipt(target, size, digest.hexdigest())
         finally:partial.unlink(missing_ok=True)
 
 def check_args(definition, args):
@@ -223,7 +236,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.4.0'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.4.1'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and backed up before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools}

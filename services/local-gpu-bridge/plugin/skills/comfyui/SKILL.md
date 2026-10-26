@@ -10,7 +10,7 @@ The local computer, Tailscale, bridge and ComfyUI must be running. If unavailabl
 2. Use upload_input for assets already on the VPS and pass its reference into the workflow's exposed image/input parameter.
 3. Submit run_workflow once. Keep the returned job id; if submission acknowledgement is uncertain, reuse the request_id reported in the error rather than generating another.
 4. Poll job_status every 5–15 seconds initially and back off for long tasks. Never claim completion until status is succeeded.
-5. Use fetch_artifact with the job id and output index to save files into an absolute project directory on this VPS. Report the resulting path. The original output also remains on the local computer.
+5. Use fetch_artifact with the job id and output index to save files into an absolute project directory on this VPS. Report the resulting path and saved_at timezone from the download receipt when discussing file times. The original output also remains on the local computer.
 
 cancel_pending_job cancels only a bridge-owned pending task. It intentionally does not globally interrupt ComfyUI, clear the queue, unload models, execute shell commands, expose the PC's files or modify local workflows.
 

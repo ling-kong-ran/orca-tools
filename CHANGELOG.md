@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-26 — Windows 音频产物与 VPS 文件时间 / MCP 1.4.1
+
+- 修复 SaveAudioAdvanced 等节点返回 Windows 反斜杠子目录时，桥接过滤掉已保存音频的问题；保留路径越界检查。
+- 支持从 ComfyUI history 恢复旧成功任务的空产物列表，无需重新生成音效。
+- ComfyUI、Godot/Blender 产物和项目文件下载统一按接收 VPS 时钟设置文件时间，回执明确保存时间和时区。
+- 增加 Windows 路径、旧任务恢复、三类下载及非整点时区的回归测试。
+
 ## 2026-10-26 — 失败任务复用 request_id
 
 - Git/Godot/Blender 与 ComfyUI 支持同 request_id、同参数重新提交已失败任务，创建新一轮 job，保留原记录。

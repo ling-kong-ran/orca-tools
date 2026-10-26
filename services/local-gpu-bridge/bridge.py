@@ -122,6 +122,9 @@ class ComfyAdapter:
                 def visit(value):
                     if isinstance(value, dict):
                         name = value.get('filename'); folder = value.get('subfolder', '')
+                        # Windows save nodes return backslashes; normalize only the
+                        # relative subfolder, then retain the existing traversal checks.
+                        if isinstance(folder,str): folder = folder.replace('\\','/')
                         if value.get('type', 'output') == 'output' and isinstance(name, str) and name and safe_relative(name) and '/' not in name and safe_relative(folder):
                             key = (name, folder)
                             if key not in seen:
@@ -242,6 +245,13 @@ class Bridge:
             job = self.jobs[ident]
             if job['status'] not in ('succeeded', 'failed', 'cancelled') and job.get('prompt_id'):
                 job.update(self.adapters[job['kind']].inspect(job['prompt_id'])); self.save(job)
+            elif job['status']=='succeeded' and not job.get('artifacts') and job.get('prompt_id'):
+                # Repair old successful records whose Windows output paths were
+                # discarded. Never resubmit or downgrade a cached success.
+                try: recovered=self.adapters[job['kind']].inspect(job['prompt_id'])
+                except ValueError: recovered=None
+                if recovered and recovered.get('status')=='succeeded' and recovered.get('artifacts'):
+                    job.update(recovered);self.save(job)
             return self.public(job)
     def cancel(self, ident):
         with self.lock:

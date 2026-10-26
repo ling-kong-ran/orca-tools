@@ -1,4 +1,5 @@
 import base64, copy, hashlib, importlib.util, io, json, pathlib, socket, subprocess, sys, tempfile, threading, unittest, unittest.mock, urllib.error, urllib.request, uuid
+from datetime import datetime, timezone, timedelta
 from bridge import Bridge, Server, make_handler, apply_parameters, validate_workflow
 spec=importlib.util.spec_from_file_location('mcp_client',pathlib.Path(__file__).parent/'plugin/client.py')
 client_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(client_module)
@@ -66,8 +67,47 @@ class Tests(unittest.TestCase):
         one=self.client.call('fetch_artifact',args);two=self.client.call('fetch_artifact',args)
         self.assertNotEqual(one['path'],two['path']);self.assertEqual(pathlib.Path(one['path']).read_bytes(),self.adapter.bytes)
         self.assertEqual(one['sha256'],hashlib.sha256(self.adapter.bytes).hexdigest())
+        self.assertEqual(one['timestamp_source'],'receiver')
+        self.assertAlmostEqual(pathlib.Path(one['path']).stat().st_mtime,datetime.fromisoformat(one['saved_at']).timestamp(),places=4)
         restored=Bridge(self.config,self.adapter);self.assertEqual(restored.inspect(job['id'])['status'],'succeeded')
         with self.assertRaises(ValueError):self.client.call('fetch_artifact',{'job_id':'0'*32,'index':0})
+    def test_download_timestamp_uses_receiver_timezone_without_shifting_the_instant(self):
+        file=self.root/'received.flac';file.write_bytes(b'flac')
+        saved=datetime(2026,10,26,9,30,0,tzinfo=timezone(timedelta(hours=5,minutes=45)))
+        with unittest.mock.patch.object(client_module,'datetime') as clock:
+            clock.now.return_value.astimezone.return_value=saved
+            receipt=client_module.download_receipt(file,4,'checksum')
+        self.assertTrue(receipt['saved_at'].endswith('+05:45'))
+        self.assertEqual(file.stat().st_mtime,saved.timestamp())
+        self.assertEqual(receipt['timestamp_source'],'receiver')
+    def test_native_and_project_downloads_share_receiver_timestamps(self):
+        ident=uuid.uuid4().hex
+        project_root=self.root/'project';project_root.mkdir()
+        self.config['native']={'projects':[{'id':'fixture','name':'Fixture','root':str(project_root),'enabled':True}]}
+        self.bridge.native.jobs[ident]={'id':ident,'project_id':'fixture','engine':'godot','operation':'capture','status':'succeeded','created_at':1,'artifacts':[{'index':0,'filename':'shot.png','file':ident+'-0.png'}]}
+        folder=self.bridge.native.root/'artifacts';folder.mkdir(exist_ok=True);(folder/(ident+'-0.png')).write_bytes(b'png')
+        native=self.client.call('fetch_native_artifact',{'job_id':ident,'index':0,'destination_dir':str(self.root/'native-vps')})
+        with unittest.mock.patch.object(self.client,'request',return_value=FakeResponse(b'project')):
+            project=self.client.download_project({'project_id':'fixture','path':'model.glb','destination_dir':str(self.root/'project-vps')})
+        for receipt in (native,project):
+            self.assertEqual(receipt['timestamp_source'],'receiver')
+            self.assertAlmostEqual(pathlib.Path(receipt['path']).stat().st_mtime,datetime.fromisoformat(receipt['saved_at']).timestamp(),places=4)
+    def test_cached_success_with_missing_artifacts_is_recovered_without_regeneration(self):
+        created=self.submit();job=self.bridge.jobs[created['id']];self.adapter.complete(job['prompt_id'])
+        job.update(status='succeeded',artifacts=[]);self.bridge.save(job)
+        restored=Bridge(self.config,self.adapter)
+        recovered=restored.inspect(job['id'])
+        self.assertEqual(recovered['status'],'succeeded');self.assertEqual(len(recovered['artifacts']),1)
+        self.assertEqual(self.adapter.submissions,1)
+        download=self.client.call('fetch_artifact',{'job_id':job['id'],'index':0,'destination_dir':str(self.root/'recovered')})
+        self.assertEqual(pathlib.Path(download['path']).read_bytes(),self.adapter.bytes)
+    def test_missing_history_does_not_downgrade_cached_success(self):
+        created=self.submit();job=self.bridge.jobs[created['id']];job.update(status='succeeded',artifacts=[]);self.bridge.save(job)
+        self.adapter.states[job['prompt_id']]={'status':'unknown'}
+        self.assertEqual(self.bridge.inspect(job['id'])['status'],'succeeded')
+        with unittest.mock.patch.object(self.adapter,'inspect',side_effect=ValueError('unavailable')):
+            self.assertEqual(self.bridge.inspect(job['id'])['status'],'succeeded')
+        self.assertEqual(self.adapter.submissions,1)
     def test_cancel_only_owned_pending(self):
         created=self.submit();job=self.bridge.jobs[created['id']]
         self.adapter.states[job['prompt_id']]={'status':'running'}

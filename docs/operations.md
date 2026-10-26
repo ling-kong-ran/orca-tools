@@ -138,3 +138,9 @@ Git、Godot、Blender 和 ComfyUI 提交任务时均可复用原来的32位 requ
 | cancelled | 保留取消结果，不自动恢复 |
 
 这是再次调用提交工具时的行为，轮询 job_status/native_job_status 不会触发重试。每次提交后使用返回的 job id 查询；旧 job id 仍表示原来那轮失败。重复请求受锁保护，修复后并发提交也只创建一轮重试。相同 request_id 改参数会报错，需换新请求 ID。
+
+## 文件回传与时间
+
+ComfyUI 的 Windows 输出子目录会转为标准相对路径；保留绝对路径和目录越界拒绝规则。历史成功但产物列表为空的任务，可通过 job_status 从现有 ComfyUI history 恢复，不重新生成。
+
+MCP 1.4.1 的 fetch_artifact、fetch_native_artifact、download_project_file 都在传输完成后按接收 VPS 的系统时钟设置访问/修改时间，并在回执返回带时区偏移的 saved_at、timezone、timestamp_source=receiver。不沿用 Windows 发送端时间，也不手工平移 Unix 时间戳。显示时区仍由文件浏览器决定。升级本机桥接即可恢复产物识别；下载回执与时间策略位于 VPS 客户端，更新已安装插件后在现有 Claude 会话执行 /reload-plugins，或新建会话。
