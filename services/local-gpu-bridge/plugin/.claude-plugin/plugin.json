@@ -1,5 +1,5 @@
 {
   "name": "local-gpu",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Local ComfyUI, Godot, Blender and VRoid Studio tools over an authenticated Tailscale bridge."
 }

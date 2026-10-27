@@ -60,3 +60,9 @@ Use [VRM Add-on for Blender](https://vrm-addon-for-blender.info/) for Blender im
 ## Privacy
 
 The Studio MCP/TCP listeners remain on loopback. Only the authenticated, source-allowlisted Tailscale bridge is reachable from the VPS. The adapter forwards an explicit operation allowlist, validates project paths, filters text with the existing network/hardware/path filter, drops resource links, and strips PNG metadata. Full-window screenshots, developer tools, arbitrary batches, raw commands, arbitrary endpoints, shell and implicit in-place saves are not exposed. The persistent firewall blocks public/LAN egress from the dedicated Studio executable. Tailscale encryption is transport protection; the output filter is not a general sandbox for malicious software or intentionally encoded data.
+
+## Existing sessions with cached tool definitions
+
+If `vroid_tools` lists `export_vrm` but `vroid_operation` rejects it with `Invalid option for operation`, the Claude session still has an older operation enum. That validation happens before the request reaches Studio. Bridge 1.6.2 supports the existing `save` operation as a compatibility route: use the same project-relative `.vrm` path, title, author, optional format and replace arguments. It invokes the identical native exporter with the same path, metadata, overwrite and privacy checks. A `.vroid` path still saves editable source. This route works without restarting the session; alternatively `/reload-plugins` refreshes its schema.
+
+New MCP schemas discover operation names through `vroid_tools` rather than freezing them into an enum, while the bridge retains the strict server-side allowlist. Toolkit 1.1.2 starts both the GPU bridge and ComfyUI when the enabled GPU module activates; it does not open a browser automatically. Previously activation started only ComfyUI, leaving remote MCP unavailable until the local GPU page was opened.

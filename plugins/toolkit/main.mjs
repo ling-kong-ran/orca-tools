@@ -17,6 +17,8 @@ export default async function activate(api) {
   api.commands.register('toolkit.gpu',async(args={})=>{const result=await service.controller.openGpu();return open(result.url,args);});
   api.commands.register('toolkit.pause-downloads',async()=>{await service.controller.downloads?.pauseAll();return {ok:true};});
   api.log('Orca Toolkit is ready. Ctrl+Alt+T opens the control center.');
-  if(service.controller.settings.gpu.enabled)service.controller.gpu.startComfy().catch(()=>api.log('ComfyUI startup failed. Check the local GPU bridge log.'));
+  // open() starts both ComfyUI and the authenticated GPU bridge; it does not
+  // open a browser. Starting only ComfyUI leaves every remote MCP offline.
+  if(service.controller.settings.gpu.enabled)service.controller.gpu.open().catch(()=>api.log('GPU bridge startup failed. Check the local GPU bridge log.'));
 }
 export async function deactivate(){if(service){await service.close();service=null;}}

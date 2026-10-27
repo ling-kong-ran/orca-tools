@@ -18,6 +18,15 @@ FIELDS = {
 }
 
 
+def effective_operation(operation, arguments):
+    # Old Claude sessions cache the operation enum. Keep their existing save
+    # operation usable for VRM without relaxing project/path/metadata checks.
+    path = arguments.get('path') if isinstance(arguments, dict) else None
+    if operation == 'save' and isinstance(path, str) and path.lower().endswith('.vrm'):
+        return 'export_vrm'
+    return operation
+
+
 def clean_png(encoded):
     """Drop PNG metadata; only model pixels and decoding chunks leave the PC."""
     data = base64.b64decode(encoded, validate=True)
@@ -95,6 +104,7 @@ class VroidControl:
             raise ValueError('VRoid is still starting. Check the local editor before retrying an edit.')
 
     def validate(self, root, operation, arguments):
+        operation = effective_operation(operation, arguments)
         if operation not in FIELDS or not isinstance(arguments, dict) or set(arguments)-FIELDS[operation]:
             raise ValueError('VRoid operation or argument is not exposed.')
         if len(json.dumps(arguments, allow_nan=False)) > 32768: raise ValueError('VRoid arguments exceed 32 KB.')
@@ -141,13 +151,15 @@ class VroidControl:
         return args
 
     def tools(self):
-        return {'operations': sorted(FIELDS), 'paths': 'open/save require project-relative .vroid paths; export_vrm requires .vrm. Writes require an explicit path and replace=true for existing files.',
-                'arguments': {key: sorted(value) for key, value in FIELDS.items()},
+        return {'operations': sorted(FIELDS), 'paths': 'open reads .vroid; save writes .vroid source or .vrm through the compatible export route; export_vrm writes .vrm. All paths are project-relative. Writes require an explicit path and replace=true for existing files.',
+                'arguments': {key: sorted(value | FIELDS['export_vrm'] if key == 'save' else value) for key, value in FIELDS.items()},
                 'workflow': 'state; create(gender=female|male) or open(path); categories(section); presets/enter(section,category); select_preset(index)/set_param(value); camera; screenshot; save(path); export_vrm(path,format=1.0|0.0,title,author). Export returns to editing. Download the .vrm with download_project_file or import it with Blender import_asset. Sections and categories are case-sensitive. Use help for editor semantics.',
+                'compatibility': 'If an existing Claude session rejects operation=export_vrm as Invalid option for operation, call operation=save with the same .vrm path, title, author, format and replace arguments. This invokes the identical native exporter and needs no session restart. Saving .vroid still saves editable source.',
                 'limitations': ['export_vrm requires the Toolkit Studio export extension, installed with scripts/install-vroid-export.py. Metadata uses restrictive license defaults and explicit title/author; saved local contact details are not copied.', 'No shell, batch/raw protocol, full-window screenshots or diagnostic tools.']}
 
     def call(self, project_id, operation, arguments=None):
         _, root = self.native.project(project_id)
+        operation = effective_operation(operation, arguments or {})
         args = self.validate(root, operation, arguments or {})
         try:
             self.ensure_started()

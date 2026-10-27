@@ -6,9 +6,13 @@ const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_pro
  const moduleName=fs.readdirSync(chunks).find(name=>/^orcad-migration-source-retention-.*\.js$/.test(name));
  if(!moduleName)throw Error('This Orca version has a different installer. Import this folder from Orca Settings → Plugins.');
  const installer=require(path.join(chunks,moduleName));
- if(typeof installer.gr!=='function'||typeof installer.Fr!=='function')throw Error('Use Orca Settings → Plugins to install this folder.');
+ // Orca's bundled installer export names change between desktop builds. Select
+ // only its local-path installer, never the Git or protected bundled installer.
+ const install=Object.values(installer).find(value=>typeof value==='function'&&String(value).includes('.sourcePath')&&String(value).includes('local-path'));
+ if(typeof install!=='function')throw Error('Use Orca Settings → Plugins to install this folder.');
  const hostVersion=cp.execFileSync(path.join(resources,'bin','orca.exe'),['--version'],{encoding:'utf8',windowsHide:true}).trim();
- const result=await installer.gr({pluginsDir:installer.Fr(path.join(process.env.APPDATA,'orca')),sourcePath:__dirname,hostVersion});
+ const pluginsDir=path.join(process.env.APPDATA,'orca','plugins');
+ const result=await install({pluginsDir,pluginsDataDir:path.join(process.env.APPDATA,'orca','plugins-data'),sourcePath:__dirname,hostVersion});
  console.log(JSON.stringify(result));
  if(!result.ok)process.exitCode=1;
  else console.log('Installed. Review and enable Orca Toolkit in Orca Settings → Plugins.');

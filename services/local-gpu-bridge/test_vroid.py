@@ -58,6 +58,22 @@ class VroidTests(unittest.TestCase):
             self.assertNotIn(str(self.root), json.dumps(result))
             self.assertEqual(rpc.call_args.kwargs['timeout'], 285)
 
+    def test_old_session_save_operation_uses_the_same_vrm_exporter(self):
+        args = {'path': 'avatar.vrm', 'title': 'Avatar', 'author': 'Artist'}
+        validated = self.control.validate(self.project, 'save', args)
+        self.assertEqual(validated['format'], '1.0')
+        with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {'path': 'avatar.vrm'})
+        with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {**args, 'path': '../outside.vrm'})
+        with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {**args, 'path': 'source.vroid'})
+        (self.project/'avatar.vrm').write_bytes(struct.pack('<4sII', b'glTF', 2, 20)+b'12345678')
+        with self.assertRaises(ValueError): self.control.validate(self.project, 'save', args)
+        reply = {'content': [{'type': 'text', 'text': '{"saved":true}'}]}
+        with unittest.mock.patch.object(self.control, 'ensure_started'), unittest.mock.patch.object(self.control, 'rpc', return_value=reply) as rpc:
+            result = self.control.call('test', 'save', {**args, 'replace': True})
+            self.assertFalse(result['isError'])
+            self.assertEqual(rpc.call_args.args[1]['name'], 'export_vrm')
+            self.assertEqual(rpc.call_args.kwargs['timeout'], 285)
+
     def test_parameter_paths_use_the_upstream_index_string_argument(self):
         args = {'section': 'Face', 'category': 'Irises', 'path': 'Face/Irises/Both Eyes', 'value': '#33AA77'}
         value = self.control.validate(self.project, 'set_param', args)
