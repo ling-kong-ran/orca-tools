@@ -6,6 +6,7 @@ const root=path.join(local,'OrcaLocalTools');
 if(fs.existsSync(path.join(root,'bootstrap.pid')))throw Error('Existing helper found. Stop the verified helper process before upgrading.');
 fs.mkdirSync(root,{recursive:true});
 fs.copyFileSync(path.join(__dirname,'bootstrap.cjs'),path.join(root,'bootstrap.cjs'));
+fs.copyFileSync(path.join(__dirname,'gpu-health.cjs'),path.join(root,'gpu-health.cjs'));
 const folder=path.join(process.env.APPDATA,'Microsoft','Windows','Start Menu','Programs','Startup');
 fs.mkdirSync(folder,{recursive:true});
 const command='"'+process.execPath+'" "'+path.join(root,'bootstrap.cjs')+'"';
