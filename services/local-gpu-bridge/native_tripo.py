@@ -47,6 +47,11 @@ def patches(region):
     }
 
 
+def backend_gone(result):
+    return isinstance(result, dict) and result.get('isError') and any(
+        'could not connect to its local backend' in str(item.get('text', '')) for item in result.get('content', []) if isinstance(item, dict))
+
+
 def find_browser(configured=None):
     names = [configured] if configured else []
     for base in (os.environ.get('ProgramFiles', ''), os.environ.get('ProgramFiles(x86)', ''), str(LOCAL)):
@@ -185,13 +190,21 @@ class TripoControl:
             raise ValueError('This Tripo tool is not exposed to the VPS.')
         arguments = arguments or {}
         if not isinstance(arguments, dict) or len(json.dumps(arguments)) > 65536: raise ValueError('Tripo arguments must be an object under 64 KB.')
+        result = self._call(name, arguments)
+        if backend_gone(result):
+            # The backend stopped under a live bootstrap (a login, an update): start a fresh one.
+            # Only reads are repeated; a submission is reported so it is never sent twice.
+            self.stop()
+            if name.startswith(('tripo_get_', 'tripo_list_')): result = self._call(name, arguments)
+        return json.loads(self.to_handles(json.dumps(result, ensure_ascii=False)))
+
+    def _call(self, name, arguments):
         self.ensure_started()
-        try: result = self._send('tools/call', {'name': name, 'arguments': self.to_local(arguments)}, timeout=600)
+        try: return self._send('tools/call', {'name': name, 'arguments': self.to_local(arguments)}, timeout=600)
         except ValueError: raise
         except Exception:
             logging.exception('Tripo call failed')
             raise ValueError('Tripo Studio call did not complete; details stay in the local bridge log.') from None
-        return json.loads(self.to_handles(json.dumps(result, ensure_ascii=False)))
 
     def upload(self, filename, content_base64):
         if not isinstance(filename, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', filename) or filename.startswith('.') or pathlib.Path(filename).suffix.lower() not in UPLOAD_EXT:

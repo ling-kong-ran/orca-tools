@@ -95,6 +95,16 @@ class TripoTests(unittest.TestCase):
         self.assertEqual(marker['schema_version'], 1); self.assertEqual(len(marker['ownership_token']), 43)
         self.assertEqual(self.control.profile_dir(), profile)
 
+    def test_stopped_backend_restarts_and_repeats_only_reads(self):
+        gone = {'content': [{'type': 'text', 'text': 'The Bootstrap could not connect to its local backend.'}], 'isError': True}
+        fine = {'content': [{'type': 'text', 'text': '{}'}], 'isError': False}
+        with unittest.mock.patch.object(self.control, '_call', side_effect=[gone, fine]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
+            self.assertFalse(self.control.call('tripo_get_status', {})['isError'])
+            self.assertEqual(call.call_count, 2); stop.assert_called_once()
+        with unittest.mock.patch.object(self.control, '_call', side_effect=[gone, fine]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
+            self.assertTrue(self.control.call('tripo_start_workflow', {})['isError'])
+            self.assertEqual(call.call_count, 1); stop.assert_called_once()
+
     def test_vps_client_lists_only_tripo_tools(self):
         sys.path.insert(0, str(pathlib.Path(__file__).parent / 'plugin'))
         import client
