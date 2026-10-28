@@ -265,8 +265,15 @@ class TripoControl:
         return text
 
     def tools(self):
-        self.ensure_started()
-        tools = [english_tool(t) for t in self._send('tools/list').get('tools', []) if t.get('name') not in HIDDEN]
+        # The list is cached so a VPS session started during a sign-in still sees every tool.
+        cache = self.runtime_dir / 'tools.json'
+        try:
+            self.ensure_started()
+            tools = [english_tool(t) for t in self._send('tools/list').get('tools', []) if t.get('name') not in HIDDEN]
+            self.runtime_dir.mkdir(parents=True, exist_ok=True); cache.write_text(json.dumps(tools), encoding='utf-8')
+        except ValueError:
+            try: tools = [english_tool(t) for t in json.loads(cache.read_text(encoding='utf-8')) if t.get('name') not in HIDDEN]
+            except (OSError, ValueError): raise ValueError('Tripo Studio is not available on the GPU computer yet.') from None
         return {'tools': tools,
                 'paths': 'Local files are tripo:inputs/<name> handles from the upload tool; results come back as tripo:archive/... or tripo:assets/... handles for the download tool.'}
 

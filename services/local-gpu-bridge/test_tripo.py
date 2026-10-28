@@ -120,10 +120,12 @@ class TripoTests(unittest.TestCase):
         for name in native_tripo.TOOL_TEXT: self.assertTrue(native_tripo.TOOL_TEXT[name].isascii())
 
     def test_keepalive_waits_for_a_login(self):
+        listed = self.control.tools()['tools']; self.control.stop()
         self.control.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.control.login_lock().write_text(str(__import__('os').getpid()), encoding='utf-8')
         self.assertTrue(self.control.login_active())
         with self.assertRaisesRegex(ValueError, 'sign-in is in progress'): self.control.call('tripo_get_status', {})
+        self.assertEqual(self.control.tools()['tools'], listed)
         self.control.login_lock().write_text('999999999', encoding='utf-8')
         self.assertFalse(self.control.login_active()); self.assertFalse(self.control.login_lock().exists())
 
