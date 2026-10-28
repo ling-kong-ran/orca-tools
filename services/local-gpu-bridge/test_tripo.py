@@ -1,0 +1,110 @@
+import base64, json, pathlib, sys, tempfile, textwrap, unittest, unittest.mock
+import native_tripo
+from native_tripo import TripoControl, REGIONS
+
+FAKE_MCP = textwrap.dedent('''
+    import json, sys
+    tools = [{"name": n, "inputSchema": {"type": "object"}} for n in
+             ("tripo_get_status", "tripo_start_workflow", "tripo_set_account", "tripo_clear_account", "tripo_open_gallery")]
+    for line in sys.stdin:
+        msg = json.loads(line)
+        if "id" not in msg: continue
+        if msg["method"] == "initialize": result = {"serverInfo": {"name": "fake"}}
+        elif msg["method"] == "tools/list": result = {"tools": tools}
+        else: result = {"content": [{"type": "text", "text": json.dumps(msg["params"]["arguments"])}], "isError": False}
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+''')
+
+SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STUDIO_API_BASE_URL = "https://api.tripo3d.ai";',
+                    'return `TripoStudioMCP:${digest3}:studio.tripo3d.ai`;', 'var TRIPO_ACCOUNT_ORIGIN = "https://www.tripo3d.ai";',
+                    'var TRIPO_MCP_HTTP_PORT = 32175;', 'var ALLOWED = ["tripo3d.ai", "tripo3d.com"];'])
+
+
+class TripoTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = pathlib.Path(self.temp.name)
+        self.cache = self.root / 'cache'
+        plugin = self.cache / '0.8.0' / 'mcp'; plugin.mkdir(parents=True)
+        (plugin / 'server.mjs').write_text(SERVER, encoding='utf-8')
+        (plugin / 'bootstrap.mjs').write_text('var TRIPO_MCP_HTTP_PORT = 32175;\n', encoding='utf-8')
+        fake = self.root / 'fake_mcp.py'; fake.write_text(FAKE_MCP, encoding='utf-8')
+        self.config = {'data_dir': str(self.root / 'bridge'), 'tripo': {'region': 'cn', 'plugin_cache': str(self.cache),
+                       'data_dir': str(self.root / 'data'), 'asset_root': str(self.root / 'assets')}}
+        self.control = TripoControl(self.config, command=[sys.executable, str(fake)])
+        self.addCleanup(self.control.stop)
+
+    def test_account_tools_stay_on_the_pc(self):
+        names = [t['name'] for t in self.control.tools()['tools']]
+        self.assertEqual(names, ['tripo_get_status', 'tripo_start_workflow'])
+        for name in ('tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery', 'shell', 'get_status'):
+            with self.assertRaises(ValueError): self.control.call(name, {})
+
+    def test_paths_cross_as_handles(self):
+        upload = self.control.upload('concept.png', base64.b64encode(b'png').decode())
+        self.assertTrue(upload['path'].startswith('tripo:inputs/'))
+        reply = self.control.call('tripo_start_workflow', {'steps': [{'source': {'image_path': upload['path']}}]})
+        echoed = reply['content'][0]['text']
+        self.assertIn(upload['path'], echoed); self.assertNotIn(str(self.root), echoed)
+        local = self.control.to_local(upload['path'])
+        self.assertEqual(pathlib.Path(local).read_bytes(), b'png')
+        archive = self.root / 'data' / 'archive' / 'w1'; archive.mkdir(parents=True); (archive / 'model.glb').write_bytes(b'glb')
+        text = self.control.to_handles(json.dumps({'file': str(archive / 'model.glb')}))
+        self.assertEqual(json.loads(text)['file'], 'tripo:archive/w1/model.glb')
+        nested = json.dumps({'text': json.dumps({'file': str(archive / 'model.glb'), 'dir': str(archive)})})
+        inner = json.loads(json.loads(self.control.to_handles(nested))['text'])
+        self.assertEqual(inner, {'file': 'tripo:archive/w1/model.glb', 'dir': 'tripo:archive/w1'})
+        self.assertEqual(self.control.file('tripo:archive/w1/model.glb').read_bytes(), b'glb')
+        for bad in ('tripo:inputs/../../secret.txt', 'tripo:archive/C:/Windows/win.ini', str(archive / 'model.glb'), 'tripo:other/x'):
+            with self.assertRaises(ValueError): self.control.file(bad)
+        for name in ('../x.png', 'run.exe', '.hidden.png', 'a b.png'):
+            with self.assertRaises(ValueError): self.control.upload(name, base64.b64encode(b'x').decode())
+
+    def test_china_copy_changes_only_the_site_settings(self):
+        root = self.control.runtime_root()
+        self.assertNotEqual(root, self.cache / '0.8.0')
+        server = (root / 'mcp/server.mjs').read_text(encoding='utf-8')
+        site = REGIONS['cn']
+        for expected in (f'"{site["studio"]}"', f'"{site["api"]}"', f'"{site["account"]}"', ':studio.tripo3d.com`', 'PORT = 32176'):
+            self.assertIn(expected, server)
+        self.assertIn('["tripo3d.ai", "tripo3d.com"]', server)
+        self.assertIn('32176', (root / 'mcp/bootstrap.mjs').read_text(encoding='utf-8'))
+        self.assertIn('32175', (self.cache / '0.8.0/mcp/bootstrap.mjs').read_text(encoding='utf-8'))
+        stamp = (root / '.bridge-patch.json').stat().st_mtime_ns
+        self.assertEqual(self.control.runtime_root(), root)
+        self.assertEqual((root / '.bridge-patch.json').stat().st_mtime_ns, stamp)
+        env = self.control.environment()
+        self.assertEqual(env['TRIPO_DATA_DIR'], str(self.root / 'data'))
+        self.assertEqual(env['TRIPO_CHROME_CDP_URL'], 'http://127.0.0.1:9223')
+
+    def test_changed_plugin_is_refused_not_half_patched(self):
+        newer = self.cache / '0.9.0' / 'mcp'; newer.mkdir(parents=True)
+        (newer / 'server.mjs').write_text(SERVER.replace('var STUDIO_ORIGIN', 'const STUDIO_ORIGIN'), encoding='utf-8')
+        (newer / 'bootstrap.mjs').write_text('var TRIPO_MCP_HTTP_PORT = 32175;\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'bridge update'): self.control.runtime_root()
+        self.assertFalse((self.root / 'bridge/tripo/cn/0.9.0').exists())
+
+    def test_global_region_runs_the_plugin_unchanged(self):
+        control = TripoControl({**self.config, 'tripo': {**self.config['tripo'], 'region': 'global'}})
+        self.assertEqual(control.runtime_root(), self.cache / '0.8.0')
+        with self.assertRaises(ValueError): TripoControl({'tripo': {'region': 'eu'}})
+
+    def test_login_profile_is_marked_for_the_plugin(self):
+        profile = self.control.profile_dir()
+        marker = json.loads((profile / native_tripo.MARKER).read_text(encoding='utf-8'))
+        self.assertEqual(marker['schema_version'], 1); self.assertEqual(len(marker['ownership_token']), 43)
+        self.assertEqual(self.control.profile_dir(), profile)
+
+    def test_vps_client_lists_only_tripo_tools(self):
+        sys.path.insert(0, str(pathlib.Path(__file__).parent / 'plugin'))
+        import client
+        fake = unittest.mock.Mock()
+        fake.request.return_value = {'tools': [{'name': 'tripo_get_status'}, {'name': 'run_workflow'}, {'name': 'tripo_upload'}, 'bad']}
+        names = [t['name'] for t in client.Client.tripo_tools(fake)]
+        self.assertEqual(names, ['tripo_upload', 'tripo_download', 'tripo_get_status'])
+        fake.request.side_effect = ValueError('offline')
+        self.assertEqual([t['name'] for t in client.Client.tripo_tools(fake)], ['tripo_upload', 'tripo_download'])
+
+
+if __name__ == '__main__':
+    unittest.main()

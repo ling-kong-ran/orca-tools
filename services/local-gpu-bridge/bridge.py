@@ -4,6 +4,7 @@ import logging.handlers, mimetypes, os, pathlib, re, threading, time, urllib.err
 import urllib.parse, urllib.request, uuid, shutil
 from workflow_library import WorkflowLibrary
 from native_control import NativeControl
+from native_tripo import TripoControl
 from job_reuse import latest_attempt, attempt_fields
 
 SLUG = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
@@ -177,6 +178,7 @@ class Bridge:
             if config.get('_config_file'):
                 atomic_json(pathlib.Path(config['_config_file']),{k:v for k,v in config.items() if not k.startswith('_')})
         self.native = NativeControl(config,save_config)
+        self.tripo = TripoControl(config)
         self.jobs = {}
         for file in (self.root/'jobs').glob('*.json'):
             try:
@@ -327,6 +329,17 @@ def make_handler(bridge):
                         return
                 if self.command == 'GET' and route == '/v1/vroid/tools': return self.send_json(200, bridge.native.vroid.tools())
                 if self.command == 'POST' and route == '/v1/vroid/call': return self.send_json(200, bridge.native.vroid.call(**self.body()))
+                if self.command == 'GET' and route == '/v1/tripo/status': return self.send_json(200, bridge.tripo.status())
+                if self.command == 'GET' and route == '/v1/tripo/tools': return self.send_json(200, bridge.tripo.tools())
+                if self.command == 'POST' and route == '/v1/tripo/call': return self.send_json(200, bridge.tripo.call(**self.body()))
+                if self.command == 'POST' and route == '/v1/tripo/upload': return self.send_json(201, bridge.tripo.upload(**self.body()))
+                if self.command == 'GET' and route == '/v1/tripo/file':
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    file = bridge.tripo.file(query.get('path', [''])[0]); size = file.stat().st_size
+                    if size > bridge.config.get('max_artifact_bytes', 2*1024**3): raise ValueError('Tripo file exceeds transfer limit.')
+                    self.reply_started = True; self.send_response(200); self.send_header('Content-Type', 'application/octet-stream'); self.send_header('Content-Length', str(size)); self.end_headers()
+                    with file.open('rb') as source: shutil.copyfileobj(source, self.wfile, 1024*1024)
+                    return
                 if self.command == 'GET' and route == '/v1/jobs':
                     with bridge.lock: values = [bridge.public(j) for j in sorted(bridge.jobs.values(), key=lambda j:j['created_at'], reverse=True)[:100]]
                     return self.send_json(200, {'jobs': values})

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-29 — Tripo Studio / MCP 1.7.0
+
+- GPU 模块加入 `tripo-local`：经桥调用本机的 Tripo Studio 会员账号（第三方插件 Ador-able/tripo-studio-mcp），工具列表运行时从桥上拉取，另有 `tripo_upload`、`tripo_download` 传文件。
+- 支持国内站：`tripo.region = "cn"` 时桥自动维护一份只改站点地址和本机端口的插件副本（studio.tripo3d.com / api-cn.tripo3d.com），独立数据目录、浏览器 profile 和调试端口；上游写法变了就拒绝打补丁。
+- 账号、会话和画廊工具不对 VPS 开放；本机路径只以 `tripo:inputs|assets|archive/...` 代号进出，嵌套 JSON 里的路径也会替换。
+- 新增 `scripts/tripo-login.py`：在专用 profile 里手动登录一次，不保存密码。
+- 增加区域补丁、路径代号、越界路径、上传类型和 VPS 工具过滤的测试。
+
 ## 2026-10-27 — Blender VRM 扩展 / MCP 1.5.2
 
 - 增加 VRM 4.10.2 离线安装器与固定校验，不开放 Blender 公网访问，不覆盖普通用户偏好设置。

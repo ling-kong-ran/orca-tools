@@ -140,3 +140,7 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 ## VRoid Studio
 
 See [VRoid deployment and operations](vroid.md) for the optional managed Studio adapter. It shares this bridge and Toolkit entry; do not install a separate Orca plugin.
+
+## Tripo Studio
+
+[Tripo Studio](tripo.md)：可选，用自己的 Studio 会员账号（`tripo.region` 选国内站 `cn` 或国际站 `global`）生成和处理 3D 模型。同样走这个桥和 Toolkit 入口，账号只在本机，首次用 `scripts/tripo-login.py` 登录。

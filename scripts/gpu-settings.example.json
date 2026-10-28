@@ -31,6 +31,9 @@
       }
     ]
   },
+  "tripo": {
+    "region": "cn"
+  },
   "comfy_startup": {
     "enabled": false,
     "root": "D:/ComfyUI",

@@ -1,6 +1,6 @@
 # Orca Tools
 
-用于 Orca 远程开发的个人工具集合：在远程服务器管理 Claude 账号，将文件下载到 Windows，以及让远程 Claude 调用 Windows 上的 ComfyUI、Godot、Blender 和 VRoid Studio。
+用于 Orca 远程开发的个人工具集合：在远程服务器管理 Claude 账号，将文件下载到 Windows，以及让远程 Claude 调用 Windows 上的 ComfyUI、Godot、Blender、VRoid Studio 和 Tripo Studio。
 
 项目是独立的社区工具，使用 Orca 的本地运行时接口；不是 Orca 官方插件库。部分接口依赖 Orca 版本，升级后应先运行检查。仓库只保存源码、示例配置和部署文档，不保存登录态、密钥、真实连接配置或项目素材。
 
@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | Accounts | 切换远程 Claude 账号、查看用量与重置时间 | Toolkit 本机账号页，通过已有远程连接切换 | [账号部署](docs/account-switcher.md) |
 | Downloads | 并行下载、暂停续传、重试、SHA-256 校验 | Toolkit 内的下载页面；Ctrl+Alt+D | [下载模块](docs/parallel-download.md) |
-| GPU | ComfyUI、Godot、Blender、VRoid、Git 渲染副本 | Toolkit 查看在线状态并打开本机 GPU 管理页；Ctrl+Alt+G | [GPU 部署](docs/gpu-bridge.md) |
+| GPU | ComfyUI、Godot、Blender、VRoid、Tripo Studio、Git 渲染副本 | Toolkit 查看在线状态并打开本机 GPU 管理页；Ctrl+Alt+G | [GPU 部署](docs/gpu-bridge.md) |
 
 Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号凭据留在 VPS，GPU 服务留在 Windows，Claude MCP 插件留在 VPS；它们不是额外需要安装的 Orca UI 插件。模块各自执行任务，单个模块未配置不影响其余模块。
 
@@ -23,6 +23,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 - [可选旧账号面板/CLI](tools/account-switcher/)：Linux 普通用户服务；新版 Toolkit 直接调用远程 RPC，无需部署该面板。
 - [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
 - [VRoid Studio](docs/vroid.md)：角色预设、脸型体型、颜色、镜头、模型预览和项目保存。
+- [Tripo Studio](docs/tripo.md)：用自己的 Studio 会员账号（国内站或国际站）图生/文生 3D、重拓扑、贴图、绑骨和动画；账号只留在本机。
 - [多语言配音](docs/tts.md)：Qwen3 TTS 的中英文及其他语言参数、音色与排错。
 - [登录助手](tools/orca-startup/)：等待 Orca 打开，自动激活用户已审核启用的 Toolkit。
 - [运维说明](docs/operations.md)：自启、备份、升级和移除。
@@ -34,7 +35,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 - Windows Python **3.10+**、Node.js **18+**、Git；Linux Python **3.10+**，GPU MCP 另需已登录的 Claude Code。
 - 本机与 VPS 已登录同一个获授权的 Tailscale 网络。服务绑定私网/回环，不开公网端口。
 - GPU 功能还需本机 ComfyUI/Godot/Blender；工具不会自动下载模型、渲染器或运行不明安装包。
-- 当前版本：Orca Toolkit **1.1.2**、Local GPU Bridge/MCP **1.6.2**。旧独立插件已合并为 Toolkit 内部模块。
+- 当前版本：Orca Toolkit **1.1.2**、Local GPU Bridge/MCP **1.7.0**。旧独立插件已合并为 Toolkit 内部模块。
 
 ## 数据与执行边界
 

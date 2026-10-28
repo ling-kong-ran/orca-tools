@@ -68,6 +68,15 @@ VROID_TOOLS = NATIVE_COMMON[:6] + [
          {'project_id':STR,'operation':STR,'arguments':{'type':'object'}},['project_id','operation'],False)
 ]
 
+# tripo-local lists the GPU computer's Tripo Studio tools at run time; these two move files.
+TRIPO_FILE_TOOLS = [
+    tool('tripo_upload','Send a VPS file (concept PNG/JPG/WEBP, or a GLB/GLTF/OBJ/FBX/STL mesh, at most 40 MB) to the GPU computer for Tripo Studio. Returns a tripo:inputs/... path: pass it wherever a workflow step asks for a local image_path, front/left/back/right, reference_images or model_path.',
+         {'path':STR},['path'],False),
+    tool('tripo_download','Download a Tripo result file (a tripo:archive/... or tripo:assets/... path returned by tripo_get_workflow or tripo_get_model) into an absolute VPS folder; checks the size and returns its SHA-256.',
+         {'path':STR,'destination_dir':STR},['path','destination_dir'],False),
+]
+TRIPO_FILE_NAMES = {t['name'] for t in TRIPO_FILE_TOOLS}
+
 def vroid_state_result(result, operation):
     if operation not in ('state','status') or result.get('isError'):return result
     for item in result.get('content',[]):
@@ -138,7 +147,7 @@ class Client:
         request = urllib.request.Request(self.base+route, data=None if body is None else json.dumps(body).encode(),
             headers={'Authorization': 'Bearer '+self.token, 'Content-Type': 'application/json'})
         try:
-            response = self.opener.open(request, timeout=300 if route=='/v1/vroid/call' else 90 if stream or body is not None else 20)
+            response = self.opener.open(request, timeout=620 if route.startswith('/v1/tripo/') else 300 if route=='/v1/vroid/call' else 90 if stream or body is not None else 20)
             if stream: return response
             with response: return json.load(response)
         except urllib.error.HTTPError as error:
@@ -150,7 +159,42 @@ class Client:
             raise ValueError(str(detail)[:2000]) from None
         except (urllib.error.URLError, TimeoutError):
             raise ValueError('The local GPU computer is unreachable. Check that this computer, Tailscale and Local GPU Bridge are running; keep the same request_id when retrying a submission.') from None
+    def tripo_tools(self):
+        try: listed = self.request('/v1/tripo/tools').get('tools', [])
+        except ValueError: listed = []
+        return TRIPO_FILE_TOOLS + [t for t in listed if isinstance(t, dict) and str(t.get('name', '')).startswith('tripo_') and t['name'] not in TRIPO_FILE_NAMES]
+    def tripo_upload(self, args):
+        file = pathlib.Path(args['path'])
+        if not file.is_absolute() or not file.is_file() or file.stat().st_size > 40*1024**2: raise ValueError('Upload an absolute existing file of at most 40 MB.')
+        name = re.sub(r'[^A-Za-z0-9._-]', '_', file.name).lstrip('.')[-100:] or 'input' + file.suffix.lower()
+        return self.request('/v1/tripo/upload', {'filename': name, 'content_base64': base64.b64encode(file.read_bytes()).decode()})
+    def tripo_download(self, args):
+        handle = args['path']
+        if not re.fullmatch(r'tripo:(archive|assets|inputs)/[^\x00-\x1f]{1,512}', handle): raise ValueError('Use a tripo:archive/... or tripo:assets/... path.')
+        folder = pathlib.Path(args['destination_dir'])
+        if not folder.is_absolute(): raise ValueError('destination_dir must be absolute.')
+        folder.mkdir(parents=True, exist_ok=True)
+        name = re.sub(r'[^A-Za-z0-9._-]', '_', pathlib.PurePosixPath(handle.split('/', 1)[1]).name).lstrip('.')[:150] or 'tripo.bin'
+        partial = folder/('.'+uuid.uuid4().hex+'.part'); digest = hashlib.sha256(); size = 0
+        try:
+            with self.request('/v1/tripo/file?'+urllib.parse.urlencode({'path': handle}), stream=True) as response, partial.open('xb') as output:
+                expected = int(response.headers.get('Content-Length', '-1'))
+                if not 0 <= expected <= 2*1024**3: raise ValueError('Invalid Tripo file size.')
+                while data := response.read(1024*1024):
+                    size += len(data)
+                    if size > expected: raise ValueError('File exceeded announced size.')
+                    output.write(data); digest.update(data)
+                if size != expected: raise ValueError('File transfer was truncated.')
+            for attempt in range(10000):
+                target = folder/(name if attempt == 0 else str(attempt)+'-'+name)
+                try: os.link(partial, target); break
+                except FileExistsError: continue
+            else: raise ValueError('No unused output filename is available.')
+            return download_receipt(target, size, digest.hexdigest())
+        finally: partial.unlink(missing_ok=True)
     def call(self, name, args):
+        if name=='tripo_upload':return self.tripo_upload(args)
+        if name=='tripo_download':return self.tripo_download(args)
         if name=='vroid_tools':return self.request('/v1/vroid/tools')
         if name=='vroid_operation':return vroid_state_result(self.request('/v1/vroid/call',args),args['operation'])
         if name=='local_projects':return self.request('/v1/native/projects')
@@ -274,17 +318,25 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.6.4'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.7.0'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
-            elif method == 'tools/list': result = {'tools': tools}
+            elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}
             elif method == 'tools/call':
-                definition = next((t for t in tools if t['name'] == params.get('name')), None)
-                if not definition: raise ValueError('Unknown tool.')
+                name = params.get('name')
+                # Tripo Studio tools are validated by the GPU computer's plugin against its own schemas.
+                passthrough = callable(tools) and isinstance(name, str) and name.startswith('tripo_') and name not in TRIPO_FILE_NAMES
+                definition = None if passthrough else next((t for t in (TRIPO_FILE_TOOLS if callable(tools) else tools) if t['name'] == name), None)
+                if not passthrough and not definition: raise ValueError('Unknown tool.')
                 try:
-                    args = params.get('arguments') or {}; check_args(definition,args)
-                    value = client.call(definition['name'],args)
-                    result = value if definition['name']=='vroid_operation' else {'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}], 'isError':False}
+                    args = params.get('arguments') or {}
+                    if passthrough:
+                        if not isinstance(args, dict): raise ValueError('Tool arguments must be an object.')
+                        result = client.request('/v1/tripo/call', {'name': name, 'arguments': args})
+                    else:
+                        check_args(definition,args)
+                        value = client.call(definition['name'],args)
+                        result = value if definition['name']=='vroid_operation' else {'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}], 'isError':False}
                 except Exception as error:
                     result = {'content':[{'type':'text','text':str(error)[:2400]}], 'isError':True}
             else:
@@ -295,12 +347,12 @@ def serve(client,tools=None):
             print(json.dumps({'jsonrpc':'2.0','id':ident,'error':{'code':-32600,'message':'Invalid request'}}),flush=True)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid'],default='comfyui');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid','tripo'],default='comfyui');args=parser.parse_args()
     try:
         client=Client(args.config)
         if args.self_test:
             print(json.dumps({'status':client.call('gpu_status',{}),'catalog':client.call('list_workflows',{})},ensure_ascii=False));return
-        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS,'vroid':VROID_TOOLS}[args.namespace])
+        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS,'vroid':VROID_TOOLS,'tripo':client.tripo_tools}[args.namespace])
     except Exception as error:
         print('Local GPU plugin: '+str(error)[:500],file=sys.stderr);sys.exit(1)
 
