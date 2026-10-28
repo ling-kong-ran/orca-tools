@@ -64,12 +64,11 @@ systemctl --user restart claude-account-panel.service
 | `%LOCALAPPDATA%/LocalGpuBridge/config.json` | 本机路径、地址、token、项目授权 | 否 |
 | 同目录 `client.local.json` / VPS `~/.config/local-gpu-bridge/client.json` | 远程连接 token | 否 |
 | 同目录 `workflows/` | 本机批准的工作流，可能含提示词/资源路径 | 私下备份 |
-| 同目录 `native/git-backups/` | 本机被覆盖前的内容、patch、原提交 | 私下备份 |
 | 同目录 `native/artifacts/`、`native/runs/` | 任务产物、临时脚本和本机日志 | 否 |
 | `%LOCALAPPDATA%/OrcaParallelDownloads` | 任务、断点、临时任务私钥 | 否 |
 | `%LOCALAPPDATA%/OrcaLocalTools/startup.log` | 自启助手状态 | 否 |
 
-Git 更新每次先备份，再将**受跟踪文件**重置为配置的远端分支。Git refs/local-gpu-backups/<job-id> 保存旧 HEAD；备份目录保存 files.zip、changes.patch、state.json。恢复时先停止任务，查看 state.json，再将所需文件恢复到**另一份临时目录**验证，避免恢复过程被自动更新覆盖。本机是一次性渲染副本，正式修改应回到 VPS 提交推送。
+Git 更新直接将**受跟踪文件**重置为配置的远端分支，丢弃本机修改，不创建项目文件备份或 `refs/local-gpu-backups/` 引用。非冲突的未跟踪渲染产物通常保留。本机是一次性渲染副本，正式修改应回到 VPS 提交推送。旧版本遗留的 `native/git-backups/` 只属于历史数据，停用备份后可在无活动 Git/原生任务时清理。
 
 ## 常见故障
 

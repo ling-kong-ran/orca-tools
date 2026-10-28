@@ -1,8 +1,7 @@
 """Fixed Git operations for an approved local render mirror. No shell API."""
-import json,os,pathlib,re,subprocess,time,uuid,zipfile
+import os,pathlib,re,subprocess,time
 
 class ProjectGit:
-    BACKUPS_TO_KEEP=5
     def __init__(self,control,project,root):
         self.control=control;self.project=project;self.root=root
         self.settings=project.get('git',{})
@@ -42,72 +41,20 @@ class ProjectGit:
     def fetch(self):
         self.run(['fetch','--no-tags','--',self.remote,'+refs/heads/'+self.branch+':refs/remotes/'+self.remote+'/'+self.branch],timeout=600)
         return self.run(['rev-parse','refs/remotes/'+self.remote+'/'+self.branch]).decode().strip()
-    def prune_backups(self,current):
-        # Only complete, flat backups owned by this project are eligible. Do not
-        # follow links or remove unknown/incomplete folders after a failed pull.
-        import logging
-        folder=self.control.root/'git-backups'/self.project['id']
-        for parent in (self.control.root,folder.parent,folder):
-            if parent.is_symlink() or getattr(parent.stat(),'st_file_attributes',0)&0x400:return
-        if not folder.resolve().is_relative_to(self.control.root.resolve()):return
-        protected={current}
-        protected.update(j.get('id') for j in getattr(self.control,'jobs',{}).values()
-                         if j.get('status') in ('queued','running'))
-        complete=[]
-        for item in folder.iterdir():
-            if not re.fullmatch('[a-f0-9]{32}',item.name) or item.is_symlink() or not item.is_dir() or getattr(item.stat(),'st_file_attributes',0)&0x400:continue
-            files=list(item.iterdir())
-            if {p.name for p in files}!={'files.zip','changes.patch','state.json'}:continue
-            if any(p.is_symlink() or not p.is_file() or getattr(p.stat(),'st_file_attributes',0)&0x400 for p in files):continue
-            try:
-                stamp=float(json.loads((item/'state.json').read_text(encoding='utf-8'))['created_at'])
-                if not stamp>0:continue
-            except (ValueError,KeyError,TypeError,OSError):continue
-            complete.append((stamp,item,files))
-        complete.sort(key=lambda row:row[0],reverse=True)
-        for _,item,files in complete[self.BACKUPS_TO_KEEP:]:
-            if item.name in protected:continue
-            try:
-                for file in files:file.unlink()
-                item.rmdir()
-                self.run(['update-ref','-d','refs/local-gpu-backups/'+item.name])
-            except (OSError,ValueError):logging.warning('Could not prune an old local Git backup.')
     def pull(self,ident=None):
-        ident=ident or uuid.uuid4().hex
         before=self.status();target=self.fetch();ref='refs/remotes/'+self.remote+'/'+self.branch
         if before['branch']!=self.branch:raise ValueError('Local branch differs from the configured render branch. Select the matching branch locally first.')
-        changed=self.names(['diff','--name-only','-z','HEAD']);untracked=self.names(['ls-files','--others','--exclude-standard','-z'])
-        # Non-obstructing untracked render outputs survive reset unchanged. Do
-        # not copy all of them into another backup on every render-triggered pull.
-        tracked=set(self.names(['ls-files','-z']));incoming=self.names(['ls-tree','-rz','--name-only',ref]);selected=set(changed)
-        # reset --hard may remove untracked/ignored files obstructing incoming paths.
-        for name in incoming:
+        changed=self.names(['diff','--name-only','-z','HEAD'])
+        # Validate changed and incoming paths before overwriting the render mirror.
+        # Local changes are disposable; no archive, patch or backup ref is created.
+        for name in changed:self.file(name)
+        for name in self.names(['ls-tree','-rz','--name-only',ref]):
             file=self.file(name)
-            if name not in tracked and file.is_file():selected.add(name)
             if file.is_dir():
-                for item in file.rglob('*'):
-                    relative=item.relative_to(self.root).as_posix();self.file(relative)
-                    if item.is_file():selected.add(relative)
-            for parent in file.parents:
-                if parent==self.root:break
-                if parent.is_file():selected.add(parent.relative_to(self.root).as_posix())
-        if before['head']==target and not changed:return {'updated':False,'head':target,'tracked_changes_discarded':0}
-        folder=self.control.root/'git-backups'/self.project['id']/ident;folder.mkdir(parents=True,exist_ok=False)
-        files=[];total=0
-        for name in sorted(selected):
-            file=self.file(name)
-            if file.is_file():
-                total+=file.stat().st_size;files.append((name,file))
-                if total>2*1024**3:raise ValueError('Local Git backup exceeds 2 GB. Review the local files before updating.')
-        with zipfile.ZipFile(folder/'files.zip','w',zipfile.ZIP_STORED) as archive:
-            for name,file in files:archive.write(file,name)
-        (folder/'changes.patch').write_bytes(self.run(['diff','--binary','HEAD']))
-        (folder/'state.json').write_text(json.dumps({'previous_head':before['head'],'target_head':target,'branch':self.branch,'changed':changed,'untracked':untracked,'backup_files':[name for name,_ in files],'created_at':time.time()}),encoding='utf-8')
-        self.run(['update-ref','refs/local-gpu-backups/'+ident,before['head']])
-        # Root and every incoming path were checked before this destructive operation.
+                for item in file.rglob('*'):self.file(item.relative_to(self.root).as_posix())
+        if before['head']==target and not changed:return {'updated':False,'head':target,'tracked_changes_discarded':0,'backup_created':False}
         self.run(['reset','--hard',ref],timeout=300)
         if self.run(['rev-parse','HEAD']).decode().strip()!=target:raise ValueError('Git update could not be verified.')
-        self.prune_backups(ident)
-        return {'updated':True,'head':target,'previous_head':before['head'],'backup_id':ident,'tracked_changes_discarded':len(changed),'untracked_files_preserved_unless_obstructing_remote':True}
+        return {'updated':True,'head':target,'previous_head':before['head'],'backup_created':False,'tracked_changes_discarded':len(changed),'untracked_files_preserved_unless_obstructing_remote':True}
 
 def git_for(control,project,root):return ProjectGit(control,project,root)

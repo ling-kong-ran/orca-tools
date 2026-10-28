@@ -1,4 +1,4 @@
-import json,pathlib,subprocess,tempfile,types,unittest,zipfile,time,uuid
+import json,pathlib,subprocess,tempfile,types,unittest,time,uuid
 from unittest.mock import patch
 from native_git import ProjectGit
 from native_control import NativeControl
@@ -17,29 +17,17 @@ class GitTests(unittest.TestCase):
   self.control=types.SimpleNamespace(root=self.data,config={'native':{'git_executable':'git'}})
  def tearDown(self):self.tmp.cleanup()
  def cmd(self,args,cwd=None):return subprocess.run(['git',*args],cwd=cwd,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE).stdout
- def test_git_update_replaces_local_edits_and_backs_up_obstructing_files(self):
+ def test_git_update_discards_local_edits_without_creating_backups(self):
   (self.mirror/'scene.txt').write_text('local discarded');(self.mirror/'new.txt').write_text('local collision');(self.mirror/'reserved.json').write_text('ignored local collision');(self.mirror/'render.blend').write_bytes(b'keep generated result')
   (self.source/'scene.txt').write_text('remote two');(self.source/'new.txt').write_text('remote new');(self.source/'reserved.json').write_text('remote reserved')
   self.cmd(['add','scene.txt','new.txt'],self.source);self.cmd(['add','-f','reserved.json'],self.source);self.cmd(['commit','-m','latest'],self.source);self.cmd(['push','origin','main'],self.source)
   git=ProjectGit(self.control,self.project,self.mirror);previous=git.status()['head'];result=git.pull()
   self.assertEqual((self.mirror/'scene.txt').read_text(),'remote two');self.assertEqual((self.mirror/'new.txt').read_text(),'remote new');self.assertEqual((self.mirror/'reserved.json').read_text(),'remote reserved')
   self.assertEqual((self.mirror/'render.blend').read_bytes(),b'keep generated result');self.assertEqual(git.status()['tracked_changes'],0)
-  backup=self.data/'git-backups/fixture'/result['backup_id']
-  with zipfile.ZipFile(backup/'files.zip') as archive:
-   self.assertEqual(archive.read('scene.txt'),b'local discarded');self.assertEqual(archive.read('new.txt'),b'local collision');self.assertEqual(archive.read('reserved.json'),b'ignored local collision')
-   self.assertNotIn('render.blend',archive.namelist())
-  self.assertEqual(self.cmd(['rev-parse','refs/local-gpu-backups/'+result['backup_id']],self.mirror).decode().strip(),previous)
+  self.assertFalse(result['backup_created']);self.assertNotIn('backup_id',result)
+  self.assertFalse((self.data/'git-backups').exists())
+  self.assertEqual(self.cmd(['for-each-ref','--format=%(refname)','refs/local-gpu-backups/'],self.mirror),b'')
   self.assertFalse(git.pull()['updated'])
- def test_backup_retention_preserves_recent_active_and_incomplete_folders(self):
-  git=ProjectGit(self.control,self.project,self.mirror);base=self.data/'git-backups/fixture';base.mkdir(parents=True)
-  ids=[format(i,'032x') for i in range(8)]
-  for i,ident in enumerate(ids):
-   folder=base/ident;folder.mkdir();(folder/'state.json').write_text(json.dumps({'created_at':i+1}),encoding='utf-8')
-   (folder/'files.zip').write_bytes(b'fixture');(folder/'changes.patch').write_bytes(b'patch')
-  incomplete=base/('f'*32);incomplete.mkdir();(incomplete/'files.zip').write_bytes(b'keep')
-  self.control.jobs={ids[0]:{'id':ids[0],'status':'running'}}
-  git.prune_backups(ids[-1])
-  self.assertEqual({p.name for p in base.iterdir()},set(ids[-5:])|{ids[0],incomplete.name})
  def test_root_and_git_arguments_are_scoped(self):
   sub=self.mirror/'child';sub.mkdir()
   with self.assertRaisesRegex(ValueError,'approved project root'):ProjectGit(self.control,self.project,sub)
@@ -48,7 +36,7 @@ class GitTests(unittest.TestCase):
   git=ProjectGit(self.control,self.project,self.mirror)
   for name in ('../outside','.git/config','C:/outside','folder/../a'):
    with self.assertRaises(ValueError):git.file(name)
- def test_transient_windows_file_lock_is_retried_after_backup(self):
+ def test_transient_windows_file_lock_is_retried_without_backup(self):
   (self.mirror/'scene.txt').write_text('local render edit')
   original=subprocess.run;attempts=[]
   def temporary_lock(command,**kwargs):

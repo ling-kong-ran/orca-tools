@@ -109,7 +109,7 @@ python3 scripts/install-vps-gpu.py --client-config ~/gpu-client.local.json \
 2. Git：让 Claude 对 `project_id="game"` 调用 `project_git(operation="status")`，再 `project_git(operation="pull")`，查询 `native_job_status` 到成功。
 3. Godot：对真实存在的 scene 调用 `capture_scene`，可传场景 `user_args`；`run_project_script` 执行已同步的 `.gd`。
 4. Blender：调用 `blender_operation(operation="scene_info")`；专用实例首次操作启动。Python 用 `execute_code` / `run_script`，返回回执，不返回原始进程日志。
-5. VPS 修改**必须 commit + push**。下一次渲染前自动 fetch/reset 到配置的分支。本机受跟踪修改先备份到 `native/git-backups/<project-id>/<job-id>` 再覆盖，通常保留未跟踪渲染产物。不运行 git clean。仅备份受跟踪修改和阻碍远端写入的本机文件，避免反复复制未跟踪渲染成果；每个项目保留最新 5 份完整备份，以及活动任务关联备份。未知、不完整或含链接的备份目录不会自动删除。
+5. VPS 修改**必须 commit + push**。下一次渲染前自动 fetch/reset 到配置的分支。本机受跟踪修改直接丢弃，阻碍远端写入的本机文件由 Git 覆盖，不创建 ZIP、patch 或备份引用。非冲突未跟踪渲染产物通常保留，不运行 git clean。
 
 没有开放通用 shell、任意 Git 参数、修改远端 URL、本机 commit/push。二进制项目素材需进入仓库或由预先配置的依赖流程准备；当前不会自动运行 Git LFS pull 或递归更新 submodule。
 
