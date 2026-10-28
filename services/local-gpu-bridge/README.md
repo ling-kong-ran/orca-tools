@@ -12,3 +12,5 @@ Windows 私网 GPU 服务和 Linux Claude Code MCP 插件。
 项目开发在 VPS，本机通过唯一的 Git 同步入口更新渲染副本；不会将 VPS 的未提交文件自动上传。原生功能包括 Godot scene 参数/项目脚本、Blender Python/固定操作，ComfyUI 支持已保存图自动发现及 API 图导入。
 
 安装请使用仓库根目录的 `scripts/install-local-gpu.py` / `scripts/install-vps-gpu.py`，不要把示例地址当成真实配置直接运行。服务配置与 token 只保存在运行目录，不能提交 Git。
+
+保存的 Hunyuan3D 2.1 编辑器工作流支持自定义图片上传控件，以及白模和多视图节点的种子控制控件；上传按钮和生成后种子策略不会误传为后端输入。图片输入可通过 MCP 上传替换。安装自定义节点后，需要等待 ComfyUI 队列空闲再重启 ComfyUI，已运行的进程不会自动加载新节点。桥接服务也需要加载更新后的解析器；无需重新授权 Toolkit 插件。

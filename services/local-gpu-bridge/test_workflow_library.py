@@ -17,6 +17,20 @@ class Adapter:
  def request(self,*args,**kwargs):return SCHEMAS
  def submit(self,prompt,client_id):self.prompt=prompt;return 'test-prompt-id'
 class Tests(unittest.TestCase):
+ def test_hunyuan_image_upload_and_seed_controls_map_to_api_inputs(self):
+  schemas={**SCHEMAS,
+   'Hy3D21LoadImageWithTransparency':{'input':{'required':{'image':[['existing.png'],{'image_upload':True}]}},'output_node':False},
+   'Hy3D21MeshGenerator':{'input':{'required':{'image':['IMAGE'],'seed':['INT',{'min':0}], 'attention_mode':[['sdpa','sageattn']]}},'output_node':False}}
+  graph={'nodes':[{'id':1,'type':'Hy3D21LoadImageWithTransparency','widgets_values':['existing.png','image']},
+   {'id':2,'type':'Hy3D21MeshGenerator','inputs':[{'name':'image','link':1}],'widgets_values':[42,'randomize','sdpa']},
+   {'id':3,'type':'Save','inputs':[{'name':'value','link':2}],'widgets_values':['render']}],
+   'links':[[1,1,0,2,0,'IMAGE'],[2,2,0,3,0,'VALUE']]}
+  prompt,seeds=editor_to_prompt(graph,schemas)
+  self.assertEqual(prompt['1']['inputs'],{'image':'existing.png'})
+  self.assertEqual(prompt['2']['inputs'],{'image':['1',0],'seed':42,'attention_mode':'sdpa'})
+  self.assertEqual(seeds,[('2','seed')]);self.assertTrue(exposed_parameters(prompt,schemas)['image_1']['asset'])
+  graph['nodes'][0]['widgets_values'].append('unexpected')
+  with self.assertRaises(ConversionError):editor_to_prompt(graph,schemas)
  def test_tts_language_speaker_and_instruction_exposed_without_model_or_device(self):
   fields={'text':['STRING',{}],'language':[['Auto','Chinese','English','Japanese']],
           'speaker':[['Serena','Ryan']],'instruct':['STRING',{}],

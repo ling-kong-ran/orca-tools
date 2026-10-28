@@ -22,6 +22,13 @@ def widget_kind(spec):
     kind = spec[0]; options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
     return (isinstance(kind, list) or kind in ('STRING','INT','FLOAT','BOOLEAN','COMBO','COMFY_DYNAMICCOMBO_V3')) and not options.get('forceInput')
 
+
+def seed_control(kind, name, options):
+    # These Hunyuan nodes use the frontend's seed control without declaring
+    # control_after_generate in their Python input schema.
+    return options.get('control_after_generate') or name == 'seed' and kind in (
+        'Hy3D21MeshGenerator', 'Hy3DMultiViewsGenerator')
+
 def widget_values(node, schema):
     named = node.get('widgets_values_named')
     if isinstance(named, dict): return copy.deepcopy(named)
@@ -41,7 +48,7 @@ def widget_values(node, schema):
             raise ConversionError('A saved widget value is missing. Save this workflow again in ComfyUI.')
         result[name] = copy.deepcopy(values[index]); index += 1
         options = spec[1] if len(spec)>1 and isinstance(spec[1],dict) else {}
-        if options.get('control_after_generate') and index < len(values) and values[index] in ('fixed','randomize','increment','decrement'):
+        if seed_control(node['type'], name, options) and index < len(values) and values[index] in ('fixed','randomize','increment','decrement'):
             result['control_after_generate'] = values[index]; index += 1
         if spec[0] == 'COMFY_DYNAMICCOMBO_V3':
             selected = next((v for v in options.get('options',[]) if v.get('key') == result[name]), None)
@@ -49,8 +56,10 @@ def widget_values(node, schema):
             for child in input_schema({'input':selected.get('inputs',{})}):
                 if index >= len(values): raise ConversionError('A dynamic widget value is missing.')
                 result[name+'.'+child] = values[index]; index += 1
-    # LoadImage persists a frontend upload selector after the image name.
-    if index < len(values) and node['type'] in ('LoadImage','LoadImageMask') and values[index:] == ['image']: index = len(values)
+    # Image upload buttons are frontend widgets, not executable inputs. Custom
+    # image loaders declare the same image_upload metadata as LoadImage.
+    image_upload = any(len(spec)>1 and isinstance(spec[1],dict) and spec[1].get('image_upload') is True for spec in fields.values())
+    if index < len(values) and (image_upload or node['type'] in ('LoadImage','LoadImageMask')) and values[index:] == ['image']: index = len(values)
     if index != len(values): raise ConversionError('This custom widget layout needs an API-format export or a dedicated adapter.')
     return result
 
@@ -152,7 +161,7 @@ def editor_to_prompt(workflow, schemas):
                     else: inputs[field['name']] = value
             for name,spec in fields.items():
                 options = spec[1] if len(spec)>1 and isinstance(spec[1],dict) else {}
-                if options.get('control_after_generate'):
+                if seed_control(kind, name, options):
                     control = values.get('control_after_generate',values.get('fixed'))
                     if control == 'randomize' and name in inputs and not isinstance(inputs[name],list): random_seeds.add((prefix+node_id,name))
             output[prefix+node_id] = {'class_type':kind,'inputs':inputs}
@@ -188,11 +197,11 @@ def exposed_parameters(prompt, schemas):
             tts_text = tts and name in ('instruct','target_text')
             tts_choice = tts and name in ('language','speaker')
             primitive_text = node['class_type'] in ('PrimitiveString','PrimitiveStringMultiline') and name == 'value'
-            asset = name in ASSET_FIELDS and node['class_type'].startswith(('Load','VHS_Load'))
+            definition = fields.get(name,[]); options = definition[1] if len(definition)>1 and isinstance(definition[1],dict) else {}
+            asset = name in ASSET_FIELDS and (node['class_type'].startswith(('Load','VHS_Load')) or options.get('image_upload') is True)
             if not asset and PRIVATE_FIELDS.search(name): continue
             if isinstance(value,str) and name not in TEXT_FIELDS and name not in ('sampler_name','scheduler') and not asset and not tts_text and not tts_choice and not primitive_text: continue
             spec = {'node':node_id,'input':name,'type':{str:'string',int:'integer',float:'number',bool:'boolean'}[type(value)]}
-            definition = fields.get(name,[]); options = definition[1] if len(definition)>1 and isinstance(definition[1],dict) else {}
             # JSON serializes whole-valued FLOAT widgets as integers (e.g. 1 MP).
             # Their public schema must still accept fractional values.
             if definition and definition[0] == 'FLOAT' and type(value) in (int,float): spec['type'] = 'number'
