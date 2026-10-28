@@ -17,7 +17,10 @@ FAKE_MCP = textwrap.dedent('''
 
 SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STUDIO_API_BASE_URL = "https://api.tripo3d.ai";',
                     'return `TripoStudioMCP:${digest3}:studio.tripo3d.ai`;', 'var TRIPO_ACCOUNT_ORIGIN = "https://www.tripo3d.ai";',
-                    'var TRIPO_MCP_HTTP_PORT = 32175;', 'var ALLOWED = ["tripo3d.ai", "tripo3d.com"];'])
+                    'var TRIPO_MCP_HTTP_PORT = 32175;', 'var ALLOWED = ["tripo3d.ai", "tripo3d.com"];',
+                    '`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
+                    'session2.status().authenticated || credentialStatus?.state === "available"',
+                    'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();'])
 
 
 class TripoTests(unittest.TestCase):
@@ -71,6 +74,8 @@ class TripoTests(unittest.TestCase):
         for expected in (f'"{site["studio"]}"', f'"{site["api"]}"', f'"{site["account"]}"', ':studio.tripo3d.com`', 'PORT = 32176'):
             self.assertIn(expected, server)
         self.assertIn('["tripo3d.ai", "tripo3d.com"]', server)
+        self.assertIn('orca-tripo-cn-server\\0${process.env.TRIPO_DATA_DIR}', server)
+        self.assertIn('process.env.TRIPO_REUSE_BROWSER_SESSION === "1"', server)
         self.assertIn('32176', (root / 'mcp/bootstrap.mjs').read_text(encoding='utf-8'))
         self.assertIn('32175', (self.cache / '0.8.0/mcp/bootstrap.mjs').read_text(encoding='utf-8'))
         stamp = (root / '.bridge-patch.json').stat().st_mtime_ns
@@ -79,6 +84,8 @@ class TripoTests(unittest.TestCase):
         env = self.control.environment()
         self.assertEqual(env['TRIPO_DATA_DIR'], str(self.root / 'data'))
         self.assertEqual(env['TRIPO_CHROME_CDP_URL'], 'http://127.0.0.1:9223')
+        self.assertEqual(env['TRIPO_REUSE_BROWSER_SESSION'], '1')
+        self.assertEqual(env['TRIPO_COOKIE_ONLY'],'1')
 
     def test_changed_plugin_is_refused_not_half_patched(self):
         newer = self.cache / '0.9.0' / 'mcp'; newer.mkdir(parents=True)

@@ -7,14 +7,15 @@ Tripo Studio 接在现有的 GPU 模块里，和 Godot、Blender、VRoid 共用�
 ## 依赖
 
 - 本机已装 GPU Bridge（[部署](gpu-bridge.md)），Node.js 22+，Google Chrome 或 Microsoft Edge。
-- 第三方插件 [Ador-able/tripo-studio-mcp](https://github.com/Ador-able/tripo-studio-mcp)（非 Tripo 官方，走 Studio 网页当前的接口；网页改版时需要更新）。装在本机的 Codex 里：
+- 第三方运行包 [Ador-able/tripo-studio-mcp](https://github.com/Ador-able/tripo-studio-mcp)（非 Tripo 官方，走 Studio 网页当前的接口；网页改版时需要更新）。直接安装到 Bridge 的独立目录：
 
 ```powershell
-codex plugin marketplace add https://github.com/Ador-able/tripo-studio-mcp.git --ref main --json
-codex plugin add tripo-studio-mcp@tripo-studio --json
+python scripts/install-tripo.py
 ```
 
-桥直接启动插件自带的 `mcp/bootstrap.mjs`，不需要 Codex 一直开着。
+安装器把上游引用解析成固定提交，再下载仓库中已经编译的包。默认安装到 `%LOCALAPPDATA%\LocalGpuBridge\tripo\plugins\<版本>`。也可用 `--ref <提交>` 固定来源，或 `--bundle <已编译包目录>` 离线安装。
+
+桥自己持有 `mcp/bootstrap.mjs` 和后台的生命周期，不需要安装、启动或登录 Codex，也不连接 Codex 的 MCP 服务。已有的 Codex 插件缓存不会再作为默认安装来源；如果旧配置显式设置了 `plugin_cache`，应删除该字段或改到上述独立目录。
 
 ## 国内站和国际站
 
@@ -29,7 +30,7 @@ codex plugin add tripo-studio-mcp@tripo-studio --json
 | `global`（默认） | studio.tripo3d.ai | api.tripo3d.ai | `%LOCALAPPDATA%\TripoStudioMCP` | 9222 / 32175 |
 | `cn` | studio.tripo3d.com | api-cn.tripo3d.com | `%LOCALAPPDATA%\TripoStudioMCP-cn` | 9223 / 32176 |
 
-两个站的账号和积分不互通。上游插件只认国际站；国内站用的是同一套 `/v2/studio/...` 接口，所以 `cn` 时桥在 `%LOCALAPPDATA%\LocalGpuBridge\tripo\cn\<版本>` 放一份插件副本，只改三个站点地址、凭据名和本机服务端口，每一处都要求在原文件里恰好出现一次。上游改了写法时桥会报 “needs a bridge update”，不会打出半截补丁。上游插件升级后，下次调用会自动重做副本。
+两个站的账号和积分不互通。上游只支持国际站；`cn` 时桥生成一份中国站运行包，适配站点地址、服务端口、独立单实例锁及 Cookie 会话恢复。中国站使用浏览器会话，不依赖只接受国际站凭据名的原生密码 helper。运行包采用版本、补丁号和源码摘要组成的不可变目录，避免 Windows 被旧进程占用时替换失败。每个补丁都要求原文本恰好出现一次；上游结构改变时明确报错，不生成半截运行包。
 
 可选字段：`plugin_cache`（插件缓存目录）、`data_dir`、`asset_root`（默认 `Documents\TripoStudio`，上传的图放在其中的 `bridge-inputs`）、`browser`（固定用哪个浏览器）。
 
@@ -46,7 +47,13 @@ python scripts/tripo-login.py --region cn
 
 它先停掉插件的后台服务，再用有界面的浏览器打开专用 profile。在里面正常登录（国内站可用手机号、微信），看到工作台后关窗口。之后插件用无头浏览器复用这个 profile 读取会话，不保存密码。会话过期时 `tripo_get_status` 显示 `authenticated:false`，再跑一次登录脚本即可。登录期间不要在 VPS 上提交 Tripo 任务。
 
-不支持从别的浏览器导出 cookie：会话只在这个专用 profile 里。
+国内站也支持导入用户明确提供的现有会话 Cookie：
+
+```powershell
+python scripts/tripo-login.py --region cn --cookie
+```
+
+在隐藏提示中输入 `ory_kratos_session` 的值，不要把 Cookie 放进命令行参数、配置文件或脚本。工具先向 `auth-cn.tripo3d.com` 验证会话，再在本机专用浏览器 profile 中保存；不输出 Cookie/JWT，也不上传给 VPS。到期后可重新导入，或使用上面的网页登录流程。导入期间暂停 Tripo 调用，关闭后后台会重新读取浏览器会话。
 
 ## VPS 端
 

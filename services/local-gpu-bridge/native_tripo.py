@@ -6,18 +6,18 @@ handles, never as Windows paths. The China site (studio.tripo3d.com) serves the 
 other hosts, so region "cn" runs a copy of the plugin with its site addresses and loopback port
 changed, with its own data directory, browser profile and debug port.
 """
-import base64, hashlib, json, logging, os, pathlib, re, shutil, subprocess, threading, time
+import base64, hashlib, json, logging, os, pathlib, re, shutil, socket, subprocess, threading, time
 
 HOME = pathlib.Path(os.environ.get('USERPROFILE') or pathlib.Path.home())
 LOCAL = pathlib.Path(os.environ.get('LOCALAPPDATA') or HOME / 'AppData/Local')
-PLUGIN_CACHE = HOME / '.codex/plugins/cache/tripo-studio/tripo-studio-mcp'
+PLUGIN_CACHE = LOCAL / 'LocalGpuBridge/tripo/plugins'
 REGIONS = {
     'global': {'studio': 'https://studio.tripo3d.ai', 'api': 'https://api.tripo3d.ai', 'account': 'https://www.tripo3d.ai',
                'port': 32175, 'cdp': 9222, 'data': 'TripoStudioMCP'},
     'cn': {'studio': 'https://studio.tripo3d.com', 'api': 'https://api-cn.tripo3d.com', 'account': 'https://www.tripo3d.com',
            'port': 32176, 'cdp': 9223, 'data': 'TripoStudioMCP-cn'},
 }
-PATCH_VERSION = 1
+PATCH_VERSION = 3
 # Credentials, account switching and the local gallery never cross the bridge.
 HIDDEN = {'tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery'}
 HANDLE = re.compile(r'tripo:(inputs|assets|archive)/([^\x00-\x1f"<>|?*]{1,512})')
@@ -111,7 +111,13 @@ def patches(region):
         'mcp/server.mjs': [(f'var STUDIO_ORIGIN = "{base["studio"]}";', f'var STUDIO_ORIGIN = "{site["studio"]}";'),
                            (f'var STUDIO_API_BASE_URL = "{base["api"]}";', f'var STUDIO_API_BASE_URL = "{site["api"]}";'),
                            (f'var TRIPO_ACCOUNT_ORIGIN = "{base["account"]}";', f'var TRIPO_ACCOUNT_ORIGIN = "{site["account"]}";'),
-                           (f':{host(base["studio"])}`', f':{host(site["studio"])}`'), port],
+                           (f':{host(base["studio"])}`', f':{host(site["studio"])}`'),
+                           ('`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
+                            '`orca-tripo-' + region + '-server\\0${process.env.TRIPO_DATA_DIR}\\0${options2.identity ?? currentUserIdentity()}`'),
+                           ('session2.status().authenticated || credentialStatus?.state === "available"',
+                            'session2.status().authenticated || credentialStatus?.state === "available" || process.env.TRIPO_REUSE_BROWSER_SESSION === "1"'),
+                           ('if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
+                            'if (process.env.TRIPO_COOKIE_ONLY === "1" || (options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();'), port],
         'mcp/bootstrap.mjs': [port],
     }
 
@@ -170,11 +176,13 @@ class TripoControl:
         source = self.plugin_root(); edits = patches(self.region)
         if not edits: return source
         digest = hashlib.sha256(b''.join((source / name).read_bytes() for name in sorted(edits))).hexdigest()
-        target = self.runtime_dir / source.name; stamp = target / '.bridge-patch.json'
+        target = self.runtime_dir / (source.name + '-bridge' + str(PATCH_VERSION) + '-' + digest[:12]); stamp = target / '.bridge-patch.json'
         try:
             if json.loads(stamp.read_text(encoding='utf-8')) == {'source': digest, 'patch': PATCH_VERSION, 'region': self.region}: return target
         except (OSError, ValueError): pass
+        if target.exists():raise ValueError('The managed Tripo runtime failed its stamp check. Refusing to overwrite a possibly active directory.')
         staging = target.with_name(target.name + '.staging')
+        if not staging.resolve().is_relative_to(self.runtime_dir.resolve()):raise ValueError('Unsafe Tripo staging path.')
         shutil.rmtree(staging, ignore_errors=True); shutil.copytree(source, staging)
         for name, pairs in edits.items():
             file = staging / name; text = file.read_text(encoding='utf-8')
@@ -185,12 +193,13 @@ class TripoControl:
                 text = text.replace(old, new)
             file.write_text(text, encoding='utf-8')
         (staging / '.bridge-patch.json').write_text(json.dumps({'source': digest, 'patch': PATCH_VERSION, 'region': self.region}), encoding='utf-8')
-        shutil.rmtree(target, ignore_errors=True); staging.rename(target)
+        staging.rename(target)
         return target
 
     def environment(self):
-        env = dict(os.environ, NODE_USE_ENV_PROXY='1', TRIPO_DATA_DIR=str(self.data_dir),
+        env = dict(os.environ, NODE_USE_ENV_PROXY='1', TRIPO_DATA_DIR=str(self.data_dir), TRIPO_REUSE_BROWSER_SESSION='1',
                    TRIPO_CHROME_CDP_URL=f'http://127.0.0.1:{self.site["cdp"]}')
+        if self.region=='cn':env['TRIPO_COOKIE_ONLY']='1'
         # Pin the browser so the dedicated profile is never opened by two different browsers.
         try: env['TRIPO_CHROME_EXECUTABLE'] = find_browser(self.browser)
         except ValueError: pass
@@ -235,6 +244,19 @@ class TripoControl:
             self._send('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
                                       'clientInfo': {'name': 'local-gpu-bridge', 'version': '1'}}, timeout=60)
             self._send('notifications/initialized', notify=True)
+            # tools/list is served by the lightweight bootstrap without starting
+            # its backend. A read is required to establish the lifetime lease.
+            try:
+                ready = self._send('tools/call', {'name': 'tripo_get_status', 'arguments': {}}, timeout=60)
+                if ready.get('isError') and any(
+                    any(s in str(item.get('text','')) for s in ('MCP service is unavailable','MCP version mismatch','could not connect to its local backend'))
+                    for item in ready.get('content',[]) if isinstance(item,dict)):
+                    raise ValueError('Tripo Studio backend did not become ready. Check the local service log.')
+            except Exception:
+                process, self.process = self.process, None
+                try: process.stdin.close(); process.wait(5)
+                except (OSError, subprocess.TimeoutExpired): process.kill()
+                raise
 
     def stop(self):
         with self.start_lock:
@@ -353,15 +375,27 @@ class TripoControl:
     def open_login(self):
         """Local only: show the dedicated profile so the user signs in once by hand. The bridge's
         keep-alive waits while this process holds the login lock."""
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.login_lock().write_text(str(os.getpid()), encoding='utf-8')
-        self.stop()
-        root = self.runtime_root()
-        subprocess.run(['node', './mcp/server.mjs', '--shutdown'], cwd=str(root), env=self.environment(),
-                       capture_output=True, timeout=60, creationflags=NO_WINDOW)
+        self.begin_login()
+        self.shutdown_backend()
         browser = find_browser(self.browser)
         return subprocess.Popen([browser, '--user-data-dir=' + str(self.profile_dir()), '--no-first-run',
                                  '--no-default-browser-check', self.site['studio'] + '/workspace/generate'])
+
+    def begin_login(self):
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if self.login_active():raise ValueError('Another Tripo sign-in is already in progress.')
+        try:
+            with self.login_lock().open('x',encoding='utf-8') as stream:stream.write(str(os.getpid()))
+        except FileExistsError:raise ValueError('Another Tripo sign-in started concurrently.') from None
+        self.stop()
+
+    def shutdown_backend(self):
+        try:
+            with socket.create_connection(('127.0.0.1', self.site['port']), timeout=6):pass
+        except ConnectionRefusedError:return
+        result=subprocess.run(['node','./mcp/server.mjs','--shutdown'],cwd=str(self.runtime_root()),
+            env=self.environment(),capture_output=True,timeout=90,creationflags=NO_WINDOW)
+        if result.returncode:raise ValueError('The local Tripo backend could not shut down safely.')
 
     def end_login(self):
         self.login_lock().unlink(missing_ok=True)
