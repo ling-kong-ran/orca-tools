@@ -375,6 +375,13 @@ class NativeControl:
                     from native_script import run_script
                     self.import_godot(job,project,root)
                     run_script(self,job,project,root,output_dir)
+                    if job.get('result',{}).get('partial_success'):
+                        if git_update is not None:job['result']['git_update']=git_update
+                        with self.lock:
+                            job['status']='failed';job['error_stage']='script'
+                            job['error']='Some screenshots completed; '+str(len(job['artifacts']))+' artifacts are available. Retry only the failed screenshots listed in result.failed_screenshots.'
+                            self.save_job(job)
+                        return
                 elif job['engine']=='godot':self.run_godot(job,project,root,output_dir)
                 else:
                     self.validate_blender(job['operation'],job['arguments'],root)
@@ -452,7 +459,8 @@ class NativeControl:
     def artifact(self,ident,index):
         with self.lock:
             job=self.jobs.get(ident)
-            if not job or job['status']!='succeeded' or type(index)is not int or not 0<=index<len(job['artifacts']):raise ValueError('Artifact is not available.')
+            ready=job and (job['status']=='succeeded' or job['status']=='failed' and job.get('result',{}).get('partial_success') is True)
+            if not ready or type(index)is not int or not 0<=index<len(job['artifacts']):raise ValueError('Artifact is not available.')
             self.project(job['project_id'])
             file=self.root/'artifacts'/job['artifacts'][index]['file']
             if not re.fullmatch(ident+r'(?:-\d+)?\.(png|jpg|jpeg|webp|glb|blend)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')

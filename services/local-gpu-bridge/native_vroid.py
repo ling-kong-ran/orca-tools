@@ -5,7 +5,8 @@ from native_control import inside, private_result, private_text
 FIELDS = {
     'state': set(), 'status': set(), 'sections': set(),
     'create': {'gender'}, 'open': {'path'}, 'save': {'path', 'replace'},
-    'export_vrm': {'path', 'format', 'title', 'author', 'replace'},
+    'export_vrm': {'path', 'format', 'title', 'author', 'replace', 'license_preset'},
+    'set_vrm_license': {'path', 'replace', 'license_preset'},
     'categories': {'section'}, 'enter': {'section', 'category', 'view'},
     'presets': {'section', 'category'},
     'select_preset': {'section', 'category', 'index', 'params'},
@@ -118,17 +119,23 @@ class VroidControl:
                 raise ValueError('Invalid VRoid parameter selector.')
             # Upstream calls the selector "index", even when it is a stable path.
             args['index'] = str(selector)
-        if operation in ('open', 'save', 'export_vrm'):
+        if operation in ('open', 'save', 'export_vrm', 'set_vrm_license'):
             file = inside(root, args.get('path'))
-            suffix = '.vrm' if operation == 'export_vrm' else '.vroid'
+            suffix = '.vrm' if operation in ('export_vrm', 'set_vrm_license') else '.vroid'
             if file.suffix.lower() != suffix: raise ValueError('Use a project-relative '+suffix+' file.')
             if operation == 'open' and not file.is_file(): raise ValueError('VRoid project file is unavailable.')
-            if operation in ('save', 'export_vrm'):
+            if operation in ('save', 'export_vrm', 'set_vrm_license'):
                 if 'replace' in args and type(args['replace']) is not bool: raise ValueError('replace must be boolean.')
                 if file.exists() and args.get('replace') is not True: raise ValueError('File exists; replace=true is required.')
                 if not file.parent.is_dir(): raise ValueError('Create the destination folder through the project first.')
-            if operation != 'export_vrm': args.pop('replace', None)
+            if operation == 'set_vrm_license' and (not file.is_file() or args.get('replace') is not True):
+                raise ValueError('Select an existing .vrm and explicitly set replace=true to update its license.')
+            if operation not in ('export_vrm', 'set_vrm_license'): args.pop('replace', None)
             args['path'] = str(file)
+        if operation in ('export_vrm', 'set_vrm_license'):
+            from native_vrm import PRESETS
+            if args.get('license_preset', 'commercial_modifiable') not in PRESETS:
+                raise ValueError('license_preset must be commercial_modifiable or restrictive.')
         if operation == 'export_vrm':
             if args.get('format', '1.0') not in ('1.0', '0.0'): raise ValueError('VRM format must be 1.0 or 0.0.')
             args['format'] = args.get('format', '1.0')
@@ -155,13 +162,21 @@ class VroidControl:
                 'arguments': {key: sorted(value | FIELDS['export_vrm'] if key == 'save' else value) for key, value in FIELDS.items()},
                 'workflow': 'state; create(gender=female|male) or open(path); categories(section); presets/enter(section,category); select_preset(index)/set_param(value); camera; screenshot; save(path); export_vrm(path,format=1.0|0.0,title,author). Export returns to editing. Download the .vrm with download_project_file or import it with Blender import_asset. Sections and categories are case-sensitive. Use help for editor semantics.',
                 'compatibility': 'If an existing Claude session rejects operation=export_vrm as Invalid option for operation, call operation=save with the same .vrm path, title, author, format and replace arguments. This invokes the identical native exporter and needs no session restart. Saving .vroid still saves editable source.',
-                'limitations': ['export_vrm requires the Toolkit Studio export extension, installed with scripts/install-vroid-export.py. Metadata uses restrictive license defaults and explicit title/author; saved local contact details are not copied.', 'No shell, batch/raw protocol, full-window screenshots or diagnostic tools.']}
+                'license_defaults': 'commercial_modifiable: commercial use (including corporations), modification and redistribution allowed; attribution required. VRM 1.0 permission fields or VRM 0.x CC_BY metadata are written atomically. Set license_preset=restrictive to opt out. Update existing files with set_vrm_license(path,replace=true,license_preset?).',
+                'limitations': ['export_vrm requires the Toolkit Studio export extension, installed with scripts/install-vroid-export.py. Title/author are explicit; saved local contact details are not copied.', 'No shell, batch/raw protocol, full-window screenshots or diagnostic tools.']}
 
     def call(self, project_id, operation, arguments=None):
         _, root = self.native.project(project_id)
         operation = effective_operation(operation, arguments or {})
         args = self.validate(root, operation, arguments or {})
+        export_receipt = None
         try:
+            if operation == 'set_vrm_license':
+                from native_vrm import set_license
+                if not self.lock.acquire(blocking=False): raise ValueError('VRoid is busy. Query status before changing its files.')
+                try: receipt = set_license(args['path'], args.get('license_preset', 'commercial_modifiable'))
+                finally: self.lock.release()
+                return {'content': [{'type': 'text', 'text': json.dumps({'saved': True, 'path': arguments['path'], **receipt})}], 'isError': False}
             self.ensure_started()
             if operation in ('camera','screenshot','preset_preview_list','preset_preview_range') and self.process is not None:
                 self.process.show_without_focus()
@@ -171,19 +186,19 @@ class VroidControl:
                 if not self.lock.acquire(blocking=False): raise ValueError('VRoid is busy. Query status before submitting another edit.')
                 try:
                     if operation == 'export_vrm':
-                        result = self.rpc('tools/call', {'name': operation, 'arguments': args}, timeout=285)
+                        result = self.rpc('tools/call', {'name': operation, 'arguments': {k:v for k,v in args.items() if k != 'license_preset'}}, timeout=285)
+                        if not result.get('isError'):
+                            from native_vrm import set_license
+                            file = inside(root, arguments['path'])
+                            if not file.is_file(): raise ValueError('VRM export did not produce a project file.')
+                            export_receipt = set_license(file, args.get('license_preset', 'commercial_modifiable'))
                     else: result = self.rpc('tools/call', {'name': operation, 'arguments': args})
                 finally: self.lock.release()
             filtered = self.filtered(result)
             if operation == 'export_vrm' and not filtered['isError']:
                 # Return a usable relative path, never the Windows absolute path.
-                file = inside(root, arguments['path'])
-                if not file.is_file(): raise ValueError('VRM export did not produce a project file.')
-                with file.open('rb') as source: header = source.read(12)
-                if len(header) != 12 or struct.unpack('<4sII', header) != (b'glTF', 2, file.stat().st_size):
-                    raise ValueError('VRM export produced an invalid container.')
                 filtered['content'] = [{'type': 'text', 'text': json.dumps({'saved': True,
-                    'path': file.relative_to(root).as_posix(), 'format': args['format'], 'bytes': file.stat().st_size})}]
+                    'path': arguments['path'], **export_receipt})}]
             return filtered
         except ValueError: raise
         except Exception:

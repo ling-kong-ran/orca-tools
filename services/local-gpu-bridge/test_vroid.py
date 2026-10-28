@@ -1,6 +1,7 @@
 import base64, importlib.util, io, json, pathlib, struct, tempfile, unittest, unittest.mock, zlib
 from native_control import NativeControl
 from native_vroid import clean_png
+from test_native_vrm import container
 
 
 def png():
@@ -51,10 +52,11 @@ class VroidTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'produce'): self.control.call('test', 'export_vrm', args)
             (self.project/'avatar.vrm').write_bytes(b'corrupt')
             args['replace'] = True
-            with self.assertRaisesRegex(ValueError, 'invalid'): self.control.call('test', 'export_vrm', args)
-            (self.project/'avatar.vrm').write_bytes(struct.pack('<4sII', b'glTF', 2, 20)+b'12345678')
+            with self.assertRaisesRegex(ValueError, 'container'): self.control.call('test', 'export_vrm', args)
+            (self.project/'avatar.vrm').write_bytes(container())
             result = json.loads(self.control.call('test', 'export_vrm', args)['content'][0]['text'])
-            self.assertEqual(result, {'saved': True, 'path': 'avatar.vrm', 'format': '1.0', 'bytes': 20})
+            self.assertTrue(result['saved']);self.assertEqual(result['path'],'avatar.vrm');self.assertEqual(result['format'],'1.0')
+            self.assertEqual(result['license_preset'],'commercial_modifiable');self.assertTrue(result['license']['commercial_use'])
             self.assertNotIn(str(self.root), json.dumps(result))
             self.assertEqual(rpc.call_args.kwargs['timeout'], 285)
 
@@ -65,7 +67,7 @@ class VroidTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {'path': 'avatar.vrm'})
         with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {**args, 'path': '../outside.vrm'})
         with self.assertRaises(ValueError): self.control.validate(self.project, 'save', {**args, 'path': 'source.vroid'})
-        (self.project/'avatar.vrm').write_bytes(struct.pack('<4sII', b'glTF', 2, 20)+b'12345678')
+        (self.project/'avatar.vrm').write_bytes(container())
         with self.assertRaises(ValueError): self.control.validate(self.project, 'save', args)
         reply = {'content': [{'type': 'text', 'text': '{"saved":true}'}]}
         with unittest.mock.patch.object(self.control, 'ensure_started'), unittest.mock.patch.object(self.control, 'rpc', return_value=reply) as rpc:
@@ -73,6 +75,13 @@ class VroidTests(unittest.TestCase):
             self.assertFalse(result['isError'])
             self.assertEqual(rpc.call_args.args[1]['name'], 'export_vrm')
             self.assertEqual(rpc.call_args.kwargs['timeout'], 285)
+
+    def test_existing_license_update_needs_explicit_replace_but_does_not_start_studio(self):
+        file=self.project/'avatar.vrm';file.write_bytes(container())
+        with self.assertRaises(ValueError):self.control.call('test','set_vrm_license',{'path':'avatar.vrm'})
+        with unittest.mock.patch.object(self.control,'ensure_started') as start:
+            value=self.control.call('test','set_vrm_license',{'path':'avatar.vrm','replace':True})
+            start.assert_not_called();self.assertTrue(json.loads(value['content'][0]['text'])['license']['modification'])
 
     def test_parameter_paths_use_the_upstream_index_string_argument(self):
         args = {'section': 'Face', 'category': 'Irises', 'path': 'Face/Irises/Both Eyes', 'value': '#33AA77'}

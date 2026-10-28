@@ -2,6 +2,7 @@
 import json,os,pathlib,re,subprocess,time,uuid,zipfile
 
 class ProjectGit:
+    BACKUPS_TO_KEEP=5
     def __init__(self,control,project,root):
         self.control=control;self.project=project;self.root=root
         self.settings=project.get('git',{})
@@ -41,12 +42,44 @@ class ProjectGit:
     def fetch(self):
         self.run(['fetch','--no-tags','--',self.remote,'+refs/heads/'+self.branch+':refs/remotes/'+self.remote+'/'+self.branch],timeout=600)
         return self.run(['rev-parse','refs/remotes/'+self.remote+'/'+self.branch]).decode().strip()
+    def prune_backups(self,current):
+        # Only complete, flat backups owned by this project are eligible. Do not
+        # follow links or remove unknown/incomplete folders after a failed pull.
+        import logging
+        folder=self.control.root/'git-backups'/self.project['id']
+        for parent in (self.control.root,folder.parent,folder):
+            if parent.is_symlink() or getattr(parent.stat(),'st_file_attributes',0)&0x400:return
+        if not folder.resolve().is_relative_to(self.control.root.resolve()):return
+        protected={current}
+        protected.update(j.get('id') for j in getattr(self.control,'jobs',{}).values()
+                         if j.get('status') in ('queued','running'))
+        complete=[]
+        for item in folder.iterdir():
+            if not re.fullmatch('[a-f0-9]{32}',item.name) or item.is_symlink() or not item.is_dir() or getattr(item.stat(),'st_file_attributes',0)&0x400:continue
+            files=list(item.iterdir())
+            if {p.name for p in files}!={'files.zip','changes.patch','state.json'}:continue
+            if any(p.is_symlink() or not p.is_file() or getattr(p.stat(),'st_file_attributes',0)&0x400 for p in files):continue
+            try:
+                stamp=float(json.loads((item/'state.json').read_text(encoding='utf-8'))['created_at'])
+                if not stamp>0:continue
+            except (ValueError,KeyError,TypeError,OSError):continue
+            complete.append((stamp,item,files))
+        complete.sort(key=lambda row:row[0],reverse=True)
+        for _,item,files in complete[self.BACKUPS_TO_KEEP:]:
+            if item.name in protected:continue
+            try:
+                for file in files:file.unlink()
+                item.rmdir()
+                self.run(['update-ref','-d','refs/local-gpu-backups/'+item.name])
+            except (OSError,ValueError):logging.warning('Could not prune an old local Git backup.')
     def pull(self,ident=None):
         ident=ident or uuid.uuid4().hex
         before=self.status();target=self.fetch();ref='refs/remotes/'+self.remote+'/'+self.branch
         if before['branch']!=self.branch:raise ValueError('Local branch differs from the configured render branch. Select the matching branch locally first.')
         changed=self.names(['diff','--name-only','-z','HEAD']);untracked=self.names(['ls-files','--others','--exclude-standard','-z'])
-        tracked=set(self.names(['ls-files','-z']));incoming=self.names(['ls-tree','-rz','--name-only',ref]);selected=set(changed+untracked)
+        # Non-obstructing untracked render outputs survive reset unchanged. Do
+        # not copy all of them into another backup on every render-triggered pull.
+        tracked=set(self.names(['ls-files','-z']));incoming=self.names(['ls-tree','-rz','--name-only',ref]);selected=set(changed)
         # reset --hard may remove untracked/ignored files obstructing incoming paths.
         for name in incoming:
             file=self.file(name)
@@ -74,6 +107,7 @@ class ProjectGit:
         # Root and every incoming path were checked before this destructive operation.
         self.run(['reset','--hard',ref],timeout=300)
         if self.run(['rev-parse','HEAD']).decode().strip()!=target:raise ValueError('Git update could not be verified.')
+        self.prune_backups(ident)
         return {'updated':True,'head':target,'previous_head':before['head'],'backup_id':ident,'tracked_changes_discarded':len(changed),'untracked_files_preserved_unless_obstructing_remote':True}
 
 def git_for(control,project,root):return ProjectGit(control,project,root)

@@ -109,9 +109,11 @@ python3 scripts/install-vps-gpu.py --client-config ~/gpu-client.local.json \
 2. Git：让 Claude 对 `project_id="game"` 调用 `project_git(operation="status")`，再 `project_git(operation="pull")`，查询 `native_job_status` 到成功。
 3. Godot：对真实存在的 scene 调用 `capture_scene`，可传场景 `user_args`；`run_project_script` 执行已同步的 `.gd`。
 4. Blender：调用 `blender_operation(operation="scene_info")`；专用实例首次操作启动。Python 用 `execute_code` / `run_script`，返回回执，不返回原始进程日志。
-5. VPS 修改**必须 commit + push**。下一次渲染前自动 fetch/reset 到配置的分支。本机受跟踪修改先备份到 `native/git-backups/<project-id>/<job-id>` 再覆盖，通常保留未跟踪渲染产物。不运行 git clean。
+5. VPS 修改**必须 commit + push**。下一次渲染前自动 fetch/reset 到配置的分支。本机受跟踪修改先备份到 `native/git-backups/<project-id>/<job-id>` 再覆盖，通常保留未跟踪渲染产物。不运行 git clean。仅备份受跟踪修改和阻碍远端写入的本机文件，避免反复复制未跟踪渲染成果；每个项目保留最新 5 份完整备份，以及活动任务关联备份。未知、不完整或含链接的备份目录不会自动删除。
 
 没有开放通用 shell、任意 Git 参数、修改远端 URL、本机 commit/push。二进制项目素材需进入仓库或由预先配置的依赖流程准备；当前不会自动运行 Git LFS pull 或递归更新 submodule。
+
+截图批次中的单张失败不会丢弃已完成的图片。`native_job_status` 仍报告 `failed`，同时返回 `result.partial_success:true`、可下载的 `artifacts` 和可识别的 `result.failed_screenshots`。使用 `fetch_native_artifact` 下载已登记的成功结果，只重试失败的场景；没有成功产物的失败任务不可下载。参数设置、场景超时和缺失资源仍应在 VPS 项目内修正。
 
 ## 可选：项目图库的 Go 服务器
 

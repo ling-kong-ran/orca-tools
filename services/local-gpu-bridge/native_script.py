@@ -151,7 +151,7 @@ def run_script(control,job,project,root,outputs):
                     inside(root,file.relative_to(root).as_posix());result.append(file)
                     if len(result)>1000:raise ValueError('Select fewer than 1000 output artifacts.')
         return sorted(set(result))
-    for file in files():before[file]=digest(file)
+    for file in files():before[file]=(file.stat().st_mtime_ns,file.stat().st_size,digest(file))
     adapted=folder/'project-script.gd';adapted.write_text(adapt_script(script.read_text(encoding='utf-8-sig')),encoding='utf-8')
     path=inside(root,args['project_subdir']) if args.get('project_subdir') else root
     # Resource paths in project scripts remain relative to the original project.
@@ -159,18 +159,30 @@ def run_script(control,job,project,root,outputs):
     if args.get('headless',script.name=='shots.gd'):cmd.append('--headless')
     cmd+=['--path',str(path),'--audio-driver','Dummy','--position','-32000,-32000','--script',str(adapted),'--',*args.get('user_args',[])]
     broker=ProcessBroker(control,job,root,queue);process=control.process_factory(cmd,root,folder/'application.log',{'LOCAL_GPU_PROCESS_QUEUE':str(queue)})
+    timed_out=False
     try:
         deadline=time.monotonic()+args.get('timeout_seconds',1800)
         while process.poll() is None:
-            if time.monotonic()>deadline:process.stop();raise ValueError('Project script timed out.')
+            if time.monotonic()>deadline:
+                timed_out=True;process.stop();break
             broker.service();time.sleep(.05)
-        if process.poll()!=0:raise ValueError('Project script failed. Inspect the local log.')
+        exit_code=process.poll()
     finally:
         if process.poll() is None:process.stop()
         process.close();broker.close()
     artifacts=[]
     for file in files():
-        if before.get(file)==digest(file):continue
+        if before.get(file)==(file.stat().st_mtime_ns,file.stat().st_size,digest(file)):continue
         index=len(artifacts);target=outputs/(job['id']+'-'+str(index)+file.suffix.lower());shutil.copyfile(file,target)
         artifacts.append({'index':index,'filename':file.relative_to(root).as_posix(),'file':target.name})
-    job['artifacts']=artifacts;job['result']={'script_completed':True,'artifact_count':len(artifacts)}
+    complete=not timed_out and exit_code==0
+    job['artifacts']=artifacts;job['result']={'script_completed':complete,'artifact_count':len(artifacts)}
+    if not complete:
+        failed=[]
+        with (folder/'application.log').open('r',encoding='utf-8',errors='replace') as log:
+            for line in log:
+                match=re.match(r'^\s*FAIL ([A-Za-z0-9_/-]{1,180}):',line)
+                if match and match[1] not in failed and len(failed)<64:failed.append(match[1])
+        job['result'].update(partial_success=bool(artifacts),exit_code=exit_code,
+                             timed_out=timed_out,failed_screenshots=failed)
+        if not artifacts:raise ValueError('Project script timed out.' if timed_out else 'Project script failed. Inspect the local log.')

@@ -50,7 +50,7 @@ NATIVE_COMMON = [
     tool('download_project_file','Download one approved local project file, such as a generated GLB, blend scene or screenshot, onto the VPS. Does not expose arbitrary local files.',{'project_id':STR,'path':STR,'destination_dir':STR},['project_id','path']),
     tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, backing up local edits first. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
     tool('native_job_status','Check a native Godot or Blender task and its generated artifacts.',{'job_id':STR},['job_id']),
-    tool('fetch_native_artifact','Download a completed native render artifact to an exclusive file on the VPS and verify SHA-256.',{'job_id':STR,'index':{'type':'integer'},'destination_dir':STR},['job_id','index'],False)
+    tool('fetch_native_artifact','Download a registered native render artifact to an exclusive file on the VPS and verify SHA-256. Failed batches with result.partial_success=true retain successful artifacts; download these and retry only result.failed_screenshots.',{'job_id':STR,'index':{'type':'integer'},'destination_dir':STR},['job_id','index'],False)
 ]
 GODOT_TOOLS = NATIVE_COMMON + [
     tool('run_project_script','Execute a synchronized project GDScript, including tools/shots.gd screenshot galleries. Project script access and native network isolation are required. user_args follow --; use project_subdir=client for a client-rooted script. output_paths selects generated project artifacts to collect (default docs/shots). Gallery Godot/Go/server process calls are brokered; no generic shell is exposed.', {'project_id':STR,'script':STR,'user_args':{'type':'array','items':STR},'timeout_seconds':{'type':'integer'},'output_paths':{'type':'array','items':STR},'project_subdir':STR,'headless':{'type':'boolean'},'request_id':STR},['project_id','script'],False),
@@ -194,7 +194,8 @@ class Client:
             if type(index) is not int or index < 0: raise ValueError('Invalid artifact index.')
             job = self.request(prefix+'/jobs/'+ident)
             artifact = next((a for a in job['artifacts'] if a['index'] == index), None)
-            if job['status'] != 'succeeded' or not artifact: raise ValueError('Artifact is not ready.')
+            ready = job['status']=='succeeded' or name=='fetch_native_artifact' and job['status']=='failed' and job.get('result',{}).get('partial_success') is True
+            if not ready or not artifact: raise ValueError('Artifact is not ready.')
             folder = pathlib.Path(args.get('destination_dir') or str(pathlib.Path.cwd()/'local-gpu-outputs'))
             if not folder.is_absolute(): raise ValueError('destination_dir must be absolute.')
             folder.mkdir(parents=True, exist_ok=True)
@@ -273,7 +274,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.6.2'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.6.3'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and backed up before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools}

@@ -27,8 +27,19 @@ class GitTests(unittest.TestCase):
   backup=self.data/'git-backups/fixture'/result['backup_id']
   with zipfile.ZipFile(backup/'files.zip') as archive:
    self.assertEqual(archive.read('scene.txt'),b'local discarded');self.assertEqual(archive.read('new.txt'),b'local collision');self.assertEqual(archive.read('reserved.json'),b'ignored local collision')
+   self.assertNotIn('render.blend',archive.namelist())
   self.assertEqual(self.cmd(['rev-parse','refs/local-gpu-backups/'+result['backup_id']],self.mirror).decode().strip(),previous)
   self.assertFalse(git.pull()['updated'])
+ def test_backup_retention_preserves_recent_active_and_incomplete_folders(self):
+  git=ProjectGit(self.control,self.project,self.mirror);base=self.data/'git-backups/fixture';base.mkdir(parents=True)
+  ids=[format(i,'032x') for i in range(8)]
+  for i,ident in enumerate(ids):
+   folder=base/ident;folder.mkdir();(folder/'state.json').write_text(json.dumps({'created_at':i+1}),encoding='utf-8')
+   (folder/'files.zip').write_bytes(b'fixture');(folder/'changes.patch').write_bytes(b'patch')
+  incomplete=base/('f'*32);incomplete.mkdir();(incomplete/'files.zip').write_bytes(b'keep')
+  self.control.jobs={ids[0]:{'id':ids[0],'status':'running'}}
+  git.prune_backups(ids[-1])
+  self.assertEqual({p.name for p in base.iterdir()},set(ids[-5:])|{ids[0],incomplete.name})
  def test_root_and_git_arguments_are_scoped(self):
   sub=self.mirror/'child';sub.mkdir()
   with self.assertRaisesRegex(ValueError,'approved project root'):ProjectGit(self.control,self.project,sub)
