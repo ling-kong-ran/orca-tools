@@ -3,7 +3,7 @@ name: tripo
 description: Generate and post-process 3D models (image/text/multiview to 3D, retopology, textures, PBR, rigging, animation) with the user's own Tripo Studio membership through the tripo-local MCP tools on the GPU computer.
 ---
 
-Use tripo-local, not a browser, shell or direct calls to Tripo web endpoints. The Tripo account, its browser profile and session stay on the GPU computer; this side never sees or handles credentials. The bridge's tripo.region decides the site: cn is studio.tripo3d.com (China membership and credits), global is studio.tripo3d.ai. Credits on the two sites are separate.
+Use tripo-local, not a browser, shell or direct calls to Tripo web endpoints. The Tripo account, its browser profile and session stay on the GPU computer; this side never sees or handles credentials. Which Studio site and account are used is configured on the GPU computer; nothing here depends on it.
 
 Start with tripo_get_status. session.authenticated=false means the user has to sign in once on the PC with scripts/tripo-login.py; tell them, do not retry in a loop. Account tools (set or clear the account, open the gallery) are not exposed here on purpose.
 

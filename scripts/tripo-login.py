@@ -23,8 +23,9 @@ def main():
     if args.region: config['tripo'] = {**(config.get('tripo') or {}), 'region': args.region}
     control = TripoControl(config)
     print(f'Opening {control.site["studio"]} in the dedicated profile. Sign in, then close the window.')
-    control.open_login().wait()
-    print('Done. The bridge reuses this session on the next Tripo call.')
+    try: control.open_login().wait()
+    finally: control.end_login()
+    print('Done. The bridge starts Tripo Studio again within a minute and reuses this session.')
 
 
 if __name__ == '__main__':

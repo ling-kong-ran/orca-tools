@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http');
-const {createGpuRecovery,configuration,managerReady,tcpReady}=require('./gpu-health.cjs');
+const {createGpuRecovery,configuration,managerReady,tcpReady,tripoStatus}=require('./gpu-health.cjs');
 const approved={pluginKey:'local-tools.toolkit',status:'running',needsReconsent:false};
 function fixture(){
  const local=fs.mkdtempSync(path.join(os.tmpdir(),'orca-recovery-'));
@@ -33,6 +33,16 @@ test('concurrent checks share one recovery attempt',async()=>{
  const first=recover(approved);await new Promise(resolve=>setImmediate(resolve));const second=recover(approved);await new Promise(resolve=>setImmediate(resolve));
  assert.equal(calls,1);finish({ok:true});assert.deepEqual(await Promise.all([first,second]),[{status:'starting'},{status:'starting'}]);
  }finally{f.clean();}
+});
+test('a configured Tripo Studio service is reported with the online bridge, never restarted here',async()=>{
+ const f=fixture();let server;try{
+ server=http.createServer((req,res)=>{assert.equal(req.url,'/v1/tripo/status');assert.equal(req.headers.authorization,'Bearer '+'t'.repeat(64));res.end(JSON.stringify({installed:true,connected:true}));});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ fs.writeFileSync(path.join(f.local,'LocalGpuBridge','config.json'),JSON.stringify({listen:'127.0.0.1',port:server.address().port,admin_port:18773,token:'t'.repeat(64),tripo:{region:'global'}}));
+ let calls=0;const recover=createGpuRecovery({local:f.local,check:async()=>true,client:{async call(){calls++;return {ok:true};}}});
+ assert.deepEqual(await recover(approved),{status:'online',tripo:'connected'});assert.equal(calls,0);
+ assert.equal(await tripoStatus({tripo:false}),'not-configured');
+ }finally{if(server)await new Promise(resolve=>server.close(resolve));f.clean();}
 });
 test('health checks reject public endpoints and require both manager content and a live listener',async()=>{
  const f=fixture();let server;try{

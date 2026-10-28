@@ -24,6 +24,75 @@ HANDLE = re.compile(r'tripo:(inputs|assets|archive)/([^\x00-\x1f"<>|?*]{1,512})'
 UPLOAD_EXT = {'.png', '.jpg', '.jpeg', '.webp', '.glb', '.gltf', '.obj', '.fbx', '.stl'}
 MARKER = '.tripo-studio-mcp-profile'
 NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
+KEEPALIVE_SECONDS = 60
+# The VPS sees these English descriptions; the plugin's own text is not forwarded.
+TOOL_TEXT = {
+    'tripo_get_status': 'Show the Studio sign-in state, the credit balance and the background workflow queue.',
+    'tripo_list_models': 'List Studio models by scope and category, page by page.',
+    'tripo_get_model': 'Read one model: parts, capabilities, animation presets and preview images.',
+    'tripo_list_images': 'List Studio images, page by page.',
+    'tripo_get_image': 'Read one Studio image and its outputs; missing result files are downloaded.',
+    'tripo_list_templates': 'List the current image templates; optionally preview chosen template ids.',
+    'tripo_get_workflow_capabilities': 'List every workflow operation with its JSON Schema, the results it produces, where they plug into later steps, and whether it may spend credits.',
+    'tripo_start_workflow': 'Validate, persist and queue a workflow of one or more operation steps. Returns workflow_id at once; it does not wait for the remote tasks.',
+    'tripo_get_workflow': 'Read a workflow from the local record: status, results and failure reason.',
+    'tripo_list_workflows': 'List workflows from the local record, optionally filtered by status.',
+    'tripo_get_workflow_log': 'Read the background event log of a workflow from the last 24 hours.',
+    'tripo_cancel_workflow': 'Stop a workflow: steps not yet submitted are dropped; remote cancellation is attempted at a safe point.',
+    'tripo_retry_workflow': 'Start a workflow again from its first step under a new workflow_id. This can submit and spend credits again: only on explicit user request.',
+}
+OPERATION_TEXT = {
+    'image.generate': 'Generate Studio images from a prompt, a template or local reference images.',
+    'image.multiview': 'Generate four views from one Studio image.',
+    'image.regenerate': 'Regenerate an existing Studio image or four-view set.',
+    'model.generate': 'Generate one 3D model from text, one image or several views.',
+    'model.import': 'Import a local GLB, OBJ, FBX or STL model.',
+    'model.segment': 'Split a model into semantic parts.',
+    'model.complete_parts': 'Complete chosen parts with AI, or fill their holes.',
+    'model.remesh': 'Retopologize chosen model parts.',
+    'texture.generate': 'Generate model textures from text, an image or several views.',
+    'texture.edit_preview': 'Create a texture edit preview bound to one camera view.',
+    'texture.edit_apply': 'Apply a confirmed layered texture edit to the model.',
+    'texture.upscale': 'Upscale model textures to a higher resolution.',
+    'texture.pbr': 'Generate PBR materials for a textured model.',
+    'model.rig': 'Rig a model automatically.',
+    'model.animate': 'Retarget a preset animation onto a rigged model.',
+}
+
+
+def ascii_text(value):
+    """Drops non-ASCII description/title fields anywhere in a schema."""
+    if isinstance(value, list): return [ascii_text(v) for v in value]
+    if not isinstance(value, dict): return value
+    return {k: ascii_text(v) for k, v in value.items()
+            if not (k in ('description', 'title') and isinstance(v, str) and not v.isascii())}
+
+
+def english_tool(tool):
+    tool = ascii_text(tool)
+    tool['description'] = TOOL_TEXT.get(tool.get('name'), tool.get('description') or 'Tripo Studio tool.')
+    return tool
+
+
+def english_capabilities(result):
+    def fix(value):
+        if not isinstance(value, dict) or not isinstance(value.get('operations'), list): return value
+        operations = []
+        for op in value['operations']:
+            op = ascii_text(op)
+            if isinstance(op, dict): op['description'] = OPERATION_TEXT.get(op.get('name'), op.get('description') or '')
+            operations.append(op)
+        return {**value, 'operations': operations}
+    result = dict(result)
+    if 'structuredContent' in result: result['structuredContent'] = fix(result['structuredContent'])
+    content = []
+    for item in result.get('content', []):
+        if isinstance(item, dict) and item.get('type') == 'text':
+            try: item = {**item, 'text': json.dumps(fix(json.loads(item['text'])), ensure_ascii=False, indent=1)}
+            except ValueError: pass
+        content.append(item)
+    if content: result['content'] = content
+    return result
 
 
 def inside(root, relative):
@@ -45,6 +114,21 @@ def patches(region):
                            (f':{host(base["studio"])}`', f':{host(site["studio"])}`'), port],
         'mcp/bootstrap.mjs': [port],
     }
+
+
+def pid_alive(pid):
+    if os.name != 'nt':
+        try: os.kill(pid, 0); return True
+        except OSError: return False
+    # On Windows os.kill(pid, 0) terminates the process; query it instead.
+    import ctypes
+    kernel = ctypes.windll.kernel32
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle: return False
+    try:
+        code = ctypes.c_ulong()
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally: kernel.CloseHandle(handle)
 
 
 def backend_gone(result):
@@ -181,8 +265,8 @@ class TripoControl:
 
     def tools(self):
         self.ensure_started()
-        tools = [t for t in self._send('tools/list').get('tools', []) if t.get('name') not in HIDDEN]
-        return {'region': self.region, 'tools': tools,
+        tools = [english_tool(t) for t in self._send('tools/list').get('tools', []) if t.get('name') not in HIDDEN]
+        return {'tools': tools,
                 'paths': 'Local files are tripo:inputs/<name> handles from the upload tool; results come back as tripo:archive/... or tripo:assets/... handles for the download tool.'}
 
     def call(self, name, arguments=None):
@@ -196,6 +280,7 @@ class TripoControl:
             # Only reads are repeated; a submission is reported so it is never sent twice.
             self.stop()
             if name.startswith(('tripo_get_', 'tripo_list_')): result = self._call(name, arguments)
+        if name == 'tripo_get_workflow_capabilities': result = english_capabilities(result)
         return json.loads(self.to_handles(json.dumps(result, ensure_ascii=False)))
 
     def _call(self, name, arguments):
@@ -229,6 +314,25 @@ class TripoControl:
         return {'engine': 'tripo', 'region': self.region, 'installed': installed,
                 'connected': self.process is not None and self.process.poll() is None}
 
+    def login_lock(self):
+        return self.runtime_dir / 'login.lock'
+
+    def login_active(self):
+        try: pid = int(self.login_lock().read_text(encoding='utf-8'))
+        except (OSError, ValueError): return False
+        if pid_alive(pid): return True
+        self.login_lock().unlink(missing_ok=True); return False
+
+    def start_keepalive(self):
+        """Starts the plugin with the bridge and restarts it when it stops (not during a login)."""
+        def loop():
+            while True:
+                if not self.login_active() and (self.process is None or self.process.poll() is not None):
+                    try: self.ensure_started()
+                    except Exception: logging.warning('Tripo Studio service is not available yet')
+                time.sleep(KEEPALIVE_SECONDS)
+        threading.Thread(target=loop, name='tripo-keepalive', daemon=True).start()
+
     def profile_dir(self):
         profile = self.data_dir / 'chrome-profile'; profile.mkdir(parents=True, exist_ok=True)
         marker = profile / MARKER
@@ -239,7 +343,10 @@ class TripoControl:
         return profile
 
     def open_login(self):
-        """Local only: show the dedicated profile so the user signs in once by hand."""
+        """Local only: show the dedicated profile so the user signs in once by hand. The bridge's
+        keep-alive waits while this process holds the login lock."""
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.login_lock().write_text(str(os.getpid()), encoding='utf-8')
         self.stop()
         root = self.runtime_root()
         subprocess.run(['node', './mcp/server.mjs', '--shutdown'], cwd=str(root), env=self.environment(),
@@ -247,3 +354,6 @@ class TripoControl:
         browser = find_browser(self.browser)
         return subprocess.Popen([browser, '--user-data-dir=' + str(self.profile_dir()), '--no-first-run',
                                  '--no-default-browser-check', self.site['studio'] + '/workspace/generate'])
+
+    def end_login(self):
+        self.login_lock().unlink(missing_ok=True)

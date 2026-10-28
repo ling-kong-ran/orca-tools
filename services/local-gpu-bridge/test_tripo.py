@@ -35,8 +35,11 @@ class TripoTests(unittest.TestCase):
         self.addCleanup(self.control.stop)
 
     def test_account_tools_stay_on_the_pc(self):
-        names = [t['name'] for t in self.control.tools()['tools']]
+        listed = self.control.tools()
+        names = [t['name'] for t in listed['tools']]
         self.assertEqual(names, ['tripo_get_status', 'tripo_start_workflow'])
+        self.assertTrue(json.dumps(listed, ensure_ascii=False).isascii())
+        self.assertNotIn('region', listed)
         for name in ('tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery', 'shell', 'get_status'):
             with self.assertRaises(ValueError): self.control.call(name, {})
 
@@ -104,6 +107,24 @@ class TripoTests(unittest.TestCase):
         with unittest.mock.patch.object(self.control, '_call', side_effect=[gone, fine]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
             self.assertTrue(self.control.call('tripo_start_workflow', {})['isError'])
             self.assertEqual(call.call_count, 1); stop.assert_called_once()
+
+    def test_descriptions_reach_the_vps_in_english(self):
+        tool = native_tripo.english_tool({'name': 'tripo_get_status', 'description': '\u67e5\u770b\u72b6\u6001',
+                                          'inputSchema': {'type': 'object', 'properties': {'page': {'type': 'integer', 'description': '\u9875\u7801'}}}})
+        self.assertTrue(tool['description'].startswith('Show the Studio'))
+        self.assertNotIn('description', tool['inputSchema']['properties']['page'])
+        caps = {'operations': [{'name': 'model.generate', 'description': '\u751f\u6210', 'input_schema': {'title': '\u6a21\u578b', 'type': 'object'}}]}
+        result = native_tripo.english_capabilities({'structuredContent': caps, 'content': [{'type': 'text', 'text': json.dumps(caps)}]})
+        self.assertTrue(json.dumps(result, ensure_ascii=False).isascii())
+        self.assertEqual(result['structuredContent']['operations'][0]['description'], native_tripo.OPERATION_TEXT['model.generate'])
+        for name in native_tripo.TOOL_TEXT: self.assertTrue(native_tripo.TOOL_TEXT[name].isascii())
+
+    def test_keepalive_waits_for_a_login(self):
+        self.control.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.control.login_lock().write_text(str(__import__('os').getpid()), encoding='utf-8')
+        self.assertTrue(self.control.login_active())
+        self.control.login_lock().write_text('999999999', encoding='utf-8')
+        self.assertFalse(self.control.login_active()); self.assertFalse(self.control.login_lock().exists())
 
     def test_vps_client_lists_only_tripo_tools(self):
         sys.path.insert(0, str(pathlib.Path(__file__).parent / 'plugin'))

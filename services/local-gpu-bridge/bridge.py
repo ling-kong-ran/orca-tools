@@ -179,6 +179,7 @@ class Bridge:
                 atomic_json(pathlib.Path(config['_config_file']),{k:v for k,v in config.items() if not k.startswith('_')})
         self.native = NativeControl(config,save_config)
         self.tripo = TripoControl(config)
+        if config.get('tripo'): self.tripo.start_keepalive()
         self.jobs = {}
         for file in (self.root/'jobs').glob('*.json'):
             try:

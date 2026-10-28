@@ -6,6 +6,8 @@
 - 支持国内站：`tripo.region = "cn"` 时桥自动维护一份只改站点地址和本机端口的插件副本（studio.tripo3d.com / api-cn.tripo3d.com），独立数据目录、浏览器 profile 和调试端口；上游写法变了就拒绝打补丁。
 - 账号、会话和画廊工具不对 VPS 开放；本机路径只以 `tripo:inputs|assets|archive/...` 代号进出，嵌套 JSON 里的路径也会替换。
 - 新增 `scripts/tripo-login.py`：在专用 profile 里手动登录一次，不保存密码。
+- 桥启动即拉起 Tripo 后台并每分钟保活（登录期间暂停）；后台在 bootstrap 下停掉时自动重启，只读查询重试一次，提交不重试。登录助手日志记录 Tripo 状态。
+- 下发给 VPS 的工具说明和操作说明统一为英文，schema 中的非 ASCII 说明去掉，不暴露站点区域。
 - 增加区域补丁、路径代号、越界路径、上传类型和 VPS 工具过滤的测试。
 
 ## 2026-10-27 — Blender VRM 扩展 / MCP 1.5.2

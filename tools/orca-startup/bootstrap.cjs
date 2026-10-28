@@ -32,7 +32,7 @@ async function tick(){
    if(!started.ok)throw Error('Orca could not activate '+key);
    activated.add(mark);
   }
-  const gpu=await recoverGpu(plugin);states.push({key,status:'activated',gpu:gpu.status});
+  const gpu=await recoverGpu(plugin);states.push({key,status:'activated',gpu:gpu.status,...gpu.tripo?{tripo:gpu.tripo}:{}});
  }
  log({plugins:states});
 }

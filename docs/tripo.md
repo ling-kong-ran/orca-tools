@@ -33,6 +33,10 @@ codex plugin add tripo-studio-mcp@tripo-studio --json
 
 可选字段：`plugin_cache`（插件缓存目录）、`data_dir`、`asset_root`（默认 `Documents\TripoStudio`，上传的图放在其中的 `bridge-inputs`）、`browser`（固定用哪个浏览器）。
 
+## 自启动
+
+配置了 `tripo` 时，桥启动就把 Tripo 插件的后台拉起来，之后每分钟检查一次，挂了就重启；登录脚本运行期间暂停，不和登录窗口抢 profile。桥本身随 Windows 登录启动，[登录助手](../tools/orca-startup/) 掉线时会拉起桥，并在 `startup.log` 里记录 `tripo` 状态（`connected`、`starting`、`not-installed`、`unavailable`）。
+
 ## 登录（每台电脑一次）
 
 ```powershell
@@ -57,7 +61,7 @@ python scripts/tripo-login.py --region cn
 | `tripo_upload` | 把 VPS 上的图或模型（40 MB 以内）送到本机，返回 `tripo:inputs/...` |
 | `tripo_download` | 把结果（`tripo:archive/...`、`tripo:assets/...`）下载到 VPS 目录，带 SHA-256 |
 
-`tripo_set_account`、`tripo_clear_account`、`tripo_open_gallery` 不对 VPS 开放。
+`tripo_set_account`、`tripo_clear_account`、`tripo_open_gallery` 不对 VPS 开放。工具和操作说明由桥换成英文后下发，schema 里的非 ASCII 说明会去掉，VPS 端看不到站点区域。
 
 带 `may_consume_credits` 的步骤会扣会员积分。`INSUFFICIENT_CREDITS` 直接报告，不重试；`OUTCOME_UNKNOWN` 表示远端可能已经在跑，不要重新提交。
 
