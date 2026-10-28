@@ -276,6 +276,10 @@ class TripoControl:
         return value
 
     def to_handles(self, text):
+        # Upstream workflows return gallery route IDs, not filesystem paths.
+        for route, relative in self.gallery_files().items():
+            text = re.sub(re.escape(route) + r'(?=["\\\s]|$)',
+                          lambda _: 'tripo:archive/' + relative, text)
         # Results nest JSON in JSON, so a separator may be any run of backslashes; a segment
         # never contains one, which keeps an escaped closing quote (\") out of the path.
         sep = r'(?:\\+|/)'
@@ -285,6 +289,19 @@ class TripoControl:
             text = re.sub(pattern, lambda m: 'tripo:' + name + '/' + '/'.join(p for p in re.split(r'[\\/]+', m[1]) if p),
                           text, flags=re.IGNORECASE)
         return text
+
+    def gallery_files(self):
+        try:
+            catalog = json.loads((self.roots['archive'] / 'catalog.json').read_text(encoding='utf-8'))
+            result = {}
+            for item_id, item in catalog.get('items', {}).items():
+                for entry in item.get('files', []):
+                    relative = entry.get('relative_path')
+                    if not isinstance(relative, str) or not isinstance(entry.get('file_id'), str): continue
+                    inside(self.roots['archive'], relative)
+                    result['files/' + item_id + '/' + entry['file_id']] = relative
+            return result
+        except (OSError, ValueError, TypeError): return {}
 
     def tools(self):
         # The list is cached so a VPS session started during a sign-in still sees every tool.
@@ -334,7 +351,8 @@ class TripoControl:
     def file(self, handle):
         match = HANDLE.fullmatch(handle or '')
         if not match: raise ValueError('Use a tripo:inputs|assets|archive/... handle.')
-        target = inside(self.roots[match[1]], match[2])
+        relative = self.gallery_files().get(match[2], match[2]) if match[1] == 'archive' else match[2]
+        target = inside(self.roots[match[1]], relative)
         if not target.is_file(): raise ValueError('Tripo file not found.')
         return target
 

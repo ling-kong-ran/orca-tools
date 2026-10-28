@@ -46,6 +46,21 @@ class TripoTests(unittest.TestCase):
         for name in ('tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery', 'shell', 'get_status'):
             with self.assertRaises(ValueError): self.control.call(name, {})
 
+    def test_gallery_route_ids_resolve_to_downloadable_files(self):
+        archive = self.control.roots['archive']; folder = archive / 'items/model_generation--one'
+        folder.mkdir(parents=True); (folder / 'model-1.glb').write_bytes(b'glb')
+        (archive / 'catalog.json').write_text(json.dumps({'items': {'model_generation--one': {
+            'files': [{'file_id': 'model-1', 'relative_path': 'items/model_generation--one/model-1.glb'}]}}}))
+        route = 'files/model_generation--one/model-1'
+        result = json.loads(self.control.to_handles(json.dumps({'gallery_files': [route]})))
+        handle = result['gallery_files'][0]
+        self.assertEqual(handle, 'tripo:archive/items/model_generation--one/model-1.glb')
+        self.assertEqual(self.control.file(handle).read_bytes(), b'glb')
+        self.assertEqual(self.control.file('tripo:archive/' + route).read_bytes(), b'glb')
+        nested = json.dumps({'text': json.dumps({'gallery_files': [route]})})
+        self.assertEqual(json.loads(json.loads(self.control.to_handles(nested))['text'])['gallery_files'], [handle])
+        with self.assertRaises(ValueError): self.control.file('tripo:archive/files/unknown/model-1')
+
     def test_paths_cross_as_handles(self):
         upload = self.control.upload('concept.png', base64.b64encode(b'png').decode())
         self.assertTrue(upload['path'].startswith('tripo:inputs/'))
