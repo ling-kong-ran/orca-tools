@@ -14,3 +14,5 @@ Windows 私网 GPU 服务和 Linux Claude Code MCP 插件。
 安装请使用仓库根目录的 `scripts/install-local-gpu.py` / `scripts/install-vps-gpu.py`，不要把示例地址当成真实配置直接运行。服务配置与 token 只保存在运行目录，不能提交 Git。
 
 保存的 Hunyuan3D 2.1 编辑器工作流支持自定义图片上传控件，以及白模和多视图节点的种子控制控件；上传按钮和生成后种子策略不会误传为后端输入。图片输入可通过 MCP 上传替换。安装自定义节点后，需要等待 ComfyUI 队列空闲再重启 ComfyUI，已运行的进程不会自动加载新节点。桥接服务也需要加载更新后的解析器；无需重新授权 Toolkit 插件。
+
+visualbruno 的 `ComfyUI-Hunyuan3d-2-1` 在新版 Diffusers 上可能因模型代码加载确认或 VAE 接口变化而失败。安装该官方节点及其官方模型后，可运行 `python scripts/patch-hunyuan-compat.py --comfy-dir "你的 ComfyUI 目录"`，空闲时重启 ComfyUI。此补丁允许该模型随附的自定义代码加载，改用 VAE 的切片/分块接口，并移除与该自定义管线直接调用 VAE 不兼容的 CPU offload hook，保持模型与输入在同一设备；不提供额外模型或安装缺失依赖。更新节点后可用相同命令重新检查；`--check` 只检查不修改。
