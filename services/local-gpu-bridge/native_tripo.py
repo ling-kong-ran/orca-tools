@@ -224,6 +224,7 @@ class TripoControl:
     def ensure_started(self):
         with self.start_lock:
             if self.process is not None and self.process.poll() is None: return
+            if self.login_active(): raise ValueError('Tripo Studio sign-in is in progress on the GPU computer. Try again after it finishes.')
             if self.command: command, cwd = self.command, None
             else: command, cwd = ['node', './mcp/bootstrap.mjs'], str(self.runtime_root())
             # The bootstrap keeps the plugin's singleton backend (session, headless browser,

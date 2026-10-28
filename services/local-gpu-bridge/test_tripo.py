@@ -123,6 +123,7 @@ class TripoTests(unittest.TestCase):
         self.control.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.control.login_lock().write_text(str(__import__('os').getpid()), encoding='utf-8')
         self.assertTrue(self.control.login_active())
+        with self.assertRaisesRegex(ValueError, 'sign-in is in progress'): self.control.call('tripo_get_status', {})
         self.control.login_lock().write_text('999999999', encoding='utf-8')
         self.assertFalse(self.control.login_active()); self.assertFalse(self.control.login_lock().exists())
 
