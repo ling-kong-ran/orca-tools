@@ -15,3 +15,5 @@ VRoid Studio (1.5+): vroid-local provides vroid_tools and vroid_operation, shari
 Tripo Studio (1.7+): tripo-local exposes the GPU computer's Tripo Studio workflow tools for the user's own membership account (the site is chosen on the PC with tripo.region), plus tripo_upload and tripo_download for files. Account tools stay on the PC. See docs/tripo.md in the repository and /local-gpu:tripo.
 
 Blender VRM (1.5.2+): install the official VRM extension on the Windows computer with scripts/install-blender-vrm.py. The managed factory-startup instance enables it automatically. scene_info reports capabilities.vrm_import/vrm_export. import_asset/export_asset accept .vrm project paths; this does not convert .vroid projects directly. Use vroid_operation(export_vrm) for the initial Studio export; .vroid remains the editable source.
+
+Unity (1.8+): unity-local starts/stops a managed approved Editor, discovers official Pipeline tools and invokes them through the private bridge. No shell, arbitrary C# eval or desktop fallback. Install an LTS Editor, activate its license locally, install com.unity.pipeline, and configure dedicated Editor/CLI copies. See docs/unity.md.

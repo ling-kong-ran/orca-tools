@@ -5,7 +5,7 @@ $nativeRoot = Join-Path $nativeInstallRoot 'native'
 try {
     $nativeConfig = Get-Content -LiteralPath $nativeConfigPath -Raw | ConvertFrom-Json
     $nativeBlocked = @('0.0.0.0/2','64.0.0.0/3','96.0.0.0/6','100.0.0.0/10','100.128.0.0/9','101.0.0.0/8','102.0.0.0/7','104.0.0.0/5','112.0.0.0/5','120.0.0.0/6','124.0.0.0/7','126.0.0.0/8','128.0.0.0/1','::/1','8000::/1')
-    $nativePrograms = @{godot=$nativeConfig.native.godot_executable;blender=$nativeConfig.native.blender_executable;go=$nativeConfig.native.go_executable;vroid=$nativeConfig.native.vroid_executable}
+    $nativePrograms = @{godot=$nativeConfig.native.godot_executable;blender=$nativeConfig.native.blender_executable;go=$nativeConfig.native.go_executable;vroid=$nativeConfig.native.vroid_executable;unity=$nativeConfig.native.unity_executable;'unity-cli'=$nativeConfig.native.unity_cli_executable}
     foreach ($nativeProperty in $nativeConfig.native.server_executables.PSObject.Properties) {
         if ($nativeProperty.Name -notmatch '^[a-z0-9][a-z0-9_-]{0,63}$') { throw 'Invalid project id.' }
         $nativePrograms['server-' + $nativeProperty.Name] = $nativeProperty.Value
@@ -18,7 +18,7 @@ try {
             if ($nativeExe -ne $nativeExpectedServer) { throw 'Invalid managed game-server path.' }
         } else {
             if (-not (Test-Path -LiteralPath $nativeExe -PathType Leaf)) { throw 'Managed renderer/compiler executable is missing.' }
-            if ([IO.Path]::GetFileName($nativeExe) -notin @('Godot-LocalGpu.exe','blender-local-gpu.exe','go-local-gpu.exe','VRoidStudio-LocalGpu.exe')) { throw 'Refusing to change network policy for a normal application executable.' }
+            if ([IO.Path]::GetFileName($nativeExe) -notin @('Godot-LocalGpu.exe','blender-local-gpu.exe','go-local-gpu.exe','VRoidStudio-LocalGpu.exe','Unity-LocalGpu.exe','unity-cli-local-gpu.exe')) { throw 'Refusing to change network policy for a normal application executable.' }
         }
         $nativeRuleName = 'LocalGpuBridge-' + $nativeEngine + '-Private'
         $nativeOldRule = Get-NetFirewallRule -Name $nativeRuleName -ErrorAction SilentlyContinue

@@ -44,12 +44,12 @@ TOOLS = [
 
 NATIVE_COMMON = [
     tool('local_projects','List approved local rendering projects. Names, Git settings and ids only; no local absolute paths.'),
-    tool('local_status','Check Godot/Blender availability and network-isolation readiness. No hardware or public network information.'),
+    tool('local_status','Check native editor availability and network-isolation readiness. No hardware or public network information.'),
     tool('project_files','List approved project files, excluding secrets, executables, caches and Git metadata.',{'project_id':STR,'prefix':STR,'offset':{'type':'integer'},'limit':{'type':'integer'}},['project_id']),
     tool('read_project_file','Read one small project text file. Local addresses and absolute paths are redacted.',{'project_id':STR,'path':STR},['project_id','path']),
     tool('download_project_file','Download one approved local project file, such as a generated GLB, blend scene or screenshot, onto the VPS. Does not expose arbitrary local files.',{'project_id':STR,'path':STR,'destination_dir':STR},['project_id','path']),
     tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, backing up local edits first. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
-    tool('native_job_status','Check a native Godot or Blender task and its generated artifacts.',{'job_id':STR},['job_id']),
+    tool('native_job_status','Check a native render task and its generated artifacts.',{'job_id':STR},['job_id']),
     tool('fetch_native_artifact','Download a registered native render artifact to an exclusive file on the VPS and verify SHA-256. Failed batches with result.partial_success=true retain successful artifacts; download these and retry only result.failed_screenshots.',{'job_id':STR,'index':{'type':'integer'},'destination_dir':STR},['job_id','index'],False)
 ]
 GODOT_TOOLS = NATIVE_COMMON + [
@@ -76,6 +76,13 @@ TRIPO_FILE_TOOLS = [
          {'path':STR,'destination_dir':STR},['path','destination_dir'],False),
 ]
 TRIPO_FILE_NAMES = {t['name'] for t in TRIPO_FILE_TOOLS}
+
+UNITY_TOOLS = NATIVE_COMMON + [
+    tool('unity_start','Start the managed Unity Editor for an approved local project. Pulls Git first if configured. Import may take time; use unity_tools afterwards. No desktop screenshot fallback.',{'project_id':STR},['project_id'],False),
+    tool('unity_stop','Stop only the managed Unity Editor for this project. Save scene changes through an exposed Editor tool first.',{'project_id':STR},['project_id'],False),
+    tool('unity_tools','List the official Unity Pipeline tools exposed by this managed project. Shell, arbitrary C# eval, account and system tools are excluded.',{'project_id':STR},['project_id']),
+    tool('unity_call','Invoke a tool name and arguments obtained from unity_tools. Scenes, objects, assets, Play mode and viewport capture depend on the installed Pipeline catalog. No generic shell; no automatic retry of edits.',{'project_id':STR,'name':STR,'arguments':{'type':'object'}},['project_id','name'],False),
+]
 
 def vroid_state_result(result, operation):
     if operation not in ('state','status') or result.get('isError'):return result
@@ -193,6 +200,8 @@ class Client:
             return download_receipt(target, size, digest.hexdigest())
         finally: partial.unlink(missing_ok=True)
     def call(self, name, args):
+        if name in ('unity_start','unity_stop','unity_tools','unity_call'):
+            return self.request('/v1/unity/'+name[6:],args)
         if name=='tripo_upload':return self.tripo_upload(args)
         if name=='tripo_download':return self.tripo_download(args)
         if name=='vroid_tools':return self.request('/v1/vroid/tools')
@@ -318,7 +327,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.7.1'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.8.0'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}
@@ -347,12 +356,12 @@ def serve(client,tools=None):
             print(json.dumps({'jsonrpc':'2.0','id':ident,'error':{'code':-32600,'message':'Invalid request'}}),flush=True)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid','tripo'],default='comfyui');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid','tripo','unity'],default='comfyui');args=parser.parse_args()
     try:
         client=Client(args.config)
         if args.self_test:
             print(json.dumps({'status':client.call('gpu_status',{}),'catalog':client.call('list_workflows',{})},ensure_ascii=False));return
-        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS,'vroid':VROID_TOOLS,'tripo':client.tripo_tools}[args.namespace])
+        serve(client,{'comfyui':TOOLS,'godot':GODOT_TOOLS,'blender':BLENDER_TOOLS,'vroid':VROID_TOOLS,'unity':UNITY_TOOLS,'tripo':client.tripo_tools}[args.namespace])
     except Exception as error:
         print('Local GPU plugin: '+str(error)[:500],file=sys.stderr);sys.exit(1)
 

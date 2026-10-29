@@ -7,6 +7,7 @@
     "godot-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","godot"]},
     "blender-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","blender"]},
     "vroid-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","vroid"]},
-    "tripo-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","tripo"]}
+    "tripo-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","tripo"]},
+    "unity-local": {"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/client.py","--namespace","unity"]}
   }
 }

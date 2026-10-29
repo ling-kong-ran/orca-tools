@@ -1,7 +1,13 @@
 {
   "name": "local-gpu-tools",
-  "owner": {"name": "Local Tools"},
+  "owner": {
+    "name": "Local Tools"
+  },
   "plugins": [
-    {"name": "local-gpu", "source": "./plugin", "description": "Local ComfyUI, Godot, Blender and VRoid tools over Tailscale."}
+    {
+      "name": "local-gpu",
+      "source": "./plugin",
+      "description": "Local ComfyUI, Godot, Blender, VRoid, Tripo and Unity tools over Tailscale."
+    }
   ]
 }

@@ -4,7 +4,8 @@ from native_process import EgressGuard,ManagedProcess
 from remote_privacy import remote_text
 
 HEX=re.compile(r'^[a-f0-9]{32}$');SHA=re.compile(r'^[a-f0-9]{64}$')
-DENY_PARTS={'.git','.godot','.svn','node_modules','__pycache__','.ssh','.codex','.claude','.agent_bridge','saves'}
+DENY_PARTS={'.git','.godot','.svn','node_modules','__pycache__','.ssh','.codex','.claude','.agent_bridge','saves',
+            'library','temp','obj','logs','usersettings'}
 DENY_SUFFIX={'.exe','.dll','.bat','.cmd','.ps1','.sh','.vbs','.com','.scr','.lnk','.pem','.key','.pfx','.p12','.log'}
 DENY_NAMES={'credentials.json','config.json','settings.json','secrets.json','id_rsa','id_ed25519'}
 def atomic(file,value):
@@ -67,6 +68,8 @@ class NativeControl:
         self.jobs={};self.plans={}
         from native_vroid import VroidControl
         self.vroid=VroidControl(self)
+        from native_unity import UnityControl
+        self.unity=UnityControl(self)
         self.privacy_setup={'status':'idle'}
         for f in (self.root/'jobs').glob('*.json'):
             try:
@@ -85,7 +88,7 @@ class NativeControl:
             row['allow_scripts']=p.get('allow_scripts',False)
             row['git']={k:p.get('git',{}).get(k,d) for k,d in [('enabled',False),('remote','origin'),('branch','main'),('auto_pull_before_render',False)]}
             row['sync_method']='git' if row['git']['enabled'] else 'disabled'
-            if local:row.update(root=p['root'],godot_subdir=p.get('godot_subdir','client'))
+            if local:row.update(root=p['root'],godot_subdir=p.get('godot_subdir','client'),unity_subdir=p.get('unity_subdir',''))
             values.append(row)
         return values
     def project(self,ident):
@@ -95,7 +98,7 @@ class NativeControl:
         if not root.is_dir():raise ValueError('The approved project directory is unavailable.')
         return item,root
     def manage_project(self,value):
-        if set(value)-{'id','name','root','godot_subdir','enabled','sync_policy','allow_scripts','git'}:raise ValueError('Unexpected project settings.')
+        if set(value)-{'id','name','root','godot_subdir','unity_subdir','enabled','sync_policy','allow_scripts','git'}:raise ValueError('Unexpected project settings.')
         if not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}',value.get('id','')):raise ValueError('Invalid project id.')
         if not isinstance(value.get('root'),str) or not pathlib.Path(value['root']).is_absolute():raise ValueError('Use an absolute local project directory.')
         root=pathlib.Path(value['root']).resolve()
@@ -105,6 +108,8 @@ class NativeControl:
         with self.lock:
             projects=self.config.setdefault('native',{}).setdefault('projects',[])
             previous=next((p for p in projects if p['id']==item['id']),None)
+            unity_subdir=value.get('unity_subdir',(previous or {}).get('unity_subdir',''))
+            item['unity_subdir']=clean_relative(unity_subdir) if unity_subdir else ''
             item['sync_policy']=value.get('sync_policy',(previous or {}).get('sync_policy','local_review'))
             if item['sync_policy'] not in ('remote_wins','local_review'):raise ValueError('Invalid sync policy.')
             if 'allow_scripts' in value and type(value['allow_scripts'])is not bool:raise ValueError('allow_scripts must be boolean.')
@@ -128,6 +133,7 @@ class NativeControl:
             if engine=='blender':row['connected']=self.blender is not None and self.blender.poll() is None
             engines.append(row)
         engines.append(self.vroid.status())
+        engines.append(self.unity.status())
         result={'engines':engines,'projects':self.projects(local),'shell_exposed':False,'raw_code_tool_exposed':any(p.get('allow_scripts') for p in self.projects()),'project_code_executes_locally':True}
         if local:
             result['setup_script']=str(pathlib.Path(__file__).parent/'Setup-Native-Privacy.ps1')
@@ -139,7 +145,7 @@ class NativeControl:
             self.privacy_setup={'status':'checking'}
         def setup():
             try:
-                engines=[engine for engine in ('godot','blender','vroid') if self.config.get('native',{}).get(engine+'_executable')]
+                engines=[engine for engine in ('godot','blender','vroid','unity','unity-cli') if self.config.get('native',{}).get(engine.replace('-','_')+'_executable')]
                 if self.config.get('native',{}).get('go_executable'):engines.append('go')
                 engines+=['server-'+key for key in self.config.get('native',{}).get('server_executables',{})]
                 if all(self.guard.ready(engine) for engine in engines):

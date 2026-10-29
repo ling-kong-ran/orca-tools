@@ -24,6 +24,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 - [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
 - [VRoid Studio](docs/vroid.md)：角色预设、脸型体型、颜色、镜头、模型预览和项目保存。
 - [Tripo Studio](docs/tripo.md)：用自己的 Studio 会员账号（国内站或国际站）图生/文生 3D、重拓扑、贴图、绑骨和动画；账号只留在本机。
+- [Unity](docs/unity.md)：本机 Unity LTS 编辑器与官方 CLI/Pipeline 接入同一工具集，VPS 开发、本机运行与视口截图。
 - [多语言配音](docs/tts.md)：Qwen3 TTS 的中英文及其他语言参数、音色与排错。
 - [登录助手](tools/orca-startup/)：等待 Orca 打开，自动激活用户已审核启用的 Toolkit。
 - [运维说明](docs/operations.md)：自启、备份、升级和移除。

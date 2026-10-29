@@ -1,5 +1,5 @@
 {
   "name": "local-gpu",
-  "version": "1.7.1",
-  "description": "Local ComfyUI, Godot, Blender, VRoid Studio and Tripo Studio tools over an authenticated Tailscale bridge."
+  "version": "1.8.0",
+  "description": "Local ComfyUI, Godot, Blender, VRoid Studio, Tripo Studio and Unity tools over an authenticated Tailscale bridge."
 }

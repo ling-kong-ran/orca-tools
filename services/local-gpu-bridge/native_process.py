@@ -13,7 +13,7 @@ class EgressGuard:
     def __init__(self,config):self.config=config;self.lock=threading.Lock()
     def ready(self,engine):
         if os.name!='nt':return False
-        value=self.config.get('server_executables',{}).get(engine[7:]) if engine.startswith('server-') else self.config.get(engine+'_executable')
+        value=self.config.get('server_executables',{}).get(engine[7:]) if engine.startswith('server-') else self.config.get(engine.replace('-','_')+'_executable')
         if not value:return False
         exe=pathlib.Path(value)
         if not engine.startswith('server-') and not exe.is_file():return False
@@ -34,7 +34,8 @@ class EgressGuard:
         if not self.ready(engine):raise ValueError('Native network isolation is not ready. Complete the local firewall setup from the management page first.')
 
 class ManagedProcess:
-    def __init__(self,args,cwd,log,env=None,show_window=False):
+    def __init__(self,args,cwd,log,env=None,show_window=False,process_limit=1):
+        if type(process_limit) is not int or not 1<=process_limit<=128:raise ValueError('Invalid managed process limit.')
         if os.name!='nt':raise ValueError('Native rendering currently requires Windows.')
         kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         kernel.CreateJobObjectW.restype=w.HANDLE;kernel.CreateJobObjectW.argtypes=[ctypes.c_void_p,w.LPCWSTR]
@@ -44,7 +45,7 @@ class ManagedProcess:
         kernel.TerminateJobObject.argtypes=[w.HANDLE,w.UINT]
         job=kernel.CreateJobObjectW(None,None)
         limits=JOBOBJECT_EXTENDED_LIMIT_INFORMATION();limits.BasicLimitInformation.LimitFlags=0x2000|0x8
-        limits.BasicLimitInformation.ActiveProcessLimit=1
+        limits.BasicLimitInformation.ActiveProcessLimit=process_limit
         if not job or not kernel.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)):
             if job:kernel.CloseHandle(job)
             raise ValueError('Could not create the isolated native process job.')
