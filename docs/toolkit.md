@@ -13,12 +13,13 @@ Orca 里只保留一个 **Orca Toolkit** 插件；业务拆为 Accounts、Downlo
 
 ## 统一管理界面
 
-- **Accounts**：Manage accounts 在本机打开同一服务的 `/accounts/` 页面，直接列出远程账号，保留邮箱遮罩、用量、重置倒计时和账号切换。Configured 只代表已填连接；页面实际请求远程 RPC 后才显示账号。只返回必要状态，OAuth 凭据留在远程。切换后新建远程 Claude 会话，已有会话不变。
-- **Downloads**：同一18774服务的 `/downloads/` 页面。Browse remote 可进入服务器目录、返回上级/主目录、筛选和显示隐藏文件，再选择文件；也可手动填写绝对路径。按远程 environment 记住上次浏览目录和文件地址。保存目录使用 Windows 文件夹选择并独立记忆，支持暂停/续传/校验。
-- **GPU**：显示本机服务实际在线状态，打开原18773管理页；服务未启动时尝试按 launcher.json 拉起。渲染、工作流、Git设置仍由GPU服务管理。
+- **Overview**：同一页面显示实际账号数量、下载状态、已授权项目、可用工作流和近期任务。没有数据时显示未知，不伪造在线或成功状态。
+- **Accounts**：侧栏内列出远程账号，保留邮箱遮罩、用量、重置倒计时和账号切换。Configured 只代表已填连接；页面实际请求远程 RPC 后才显示账号。OAuth 凭据留在远程。切换后新建远程 Claude 会话，已有会话不变。
+- **Downloads**：同页显示下载与目录选择。Browse remote 可进入服务器目录、返回上级/主目录、筛选和显示隐藏文件，再选择文件；也可手动填写绝对路径。按远程 environment 记住上次浏览目录和文件地址。保存目录使用 Windows 文件夹选择并独立记忆，支持暂停/续传/校验。
+- **Projects / Workflows**：同页管理本机项目授权、Git 拉取、Unity/Blender 操作、隐私状态、任务与 ComfyUI 工作流导入。Connect GPU 只启动/连接服务，不打开独立网页。后台渲染服务保持独立生命周期。
 - **Module settings**：模块配置与启用状态。Accounts/GPU开关只控制 Toolkit 入口，不停止后台独立服务或远程正在执行的任务。Downloads关闭时暂停下载，开启后需手动恢复。
 
-Accounts 和 Downloads 在同一本机 Toolkit 服务内管理；GPU 继续使用现有本机后台服务。账号操作与远程目录浏览只调用已有配对 Orca 连接中的固定 RPC，不增加远程端口或通用 shell。
+所有工具共用 `http://127.0.0.1:18774/` 的侧栏和页面，以 hash 切换视图，不使用 iframe。旧 `/accounts/`、`/downloads/` 地址兼容进入统一界面。GPU 继续使用现有本机后台服务；Toolkit 仅代理固定白名单中的回环管理接口，并保留 Host、Origin、会话 token 和模块开关校验。桥接服务 token 不进入浏览器。账号操作与远程目录浏览只调用已有配对 Orca 连接中的固定 RPC，不增加远程端口或通用 shell。
 
 ## 从两个独立插件迁移
 
@@ -37,11 +38,11 @@ VPS Claude MCP 与本次 Orca UI 合并相互独立；工具协议没变化，�
 | 内容 | 位置 |
 | --- | --- |
 | 统一管理页 | http://127.0.0.1:18774/ |
-| 内置账号页 | http://127.0.0.1:18774/accounts/ |
-| 内置下载页 | http://127.0.0.1:18774/downloads/ |
+| 账号视图 | http://127.0.0.1:18774/#accounts |
+| 下载视图 | http://127.0.0.1:18774/#downloads |
 | Toolkit配置 | %LOCALAPPDATA%/OrcaTools/settings.json |
 | 下载记录/断点 | %LOCALAPPDATA%/OrcaParallelDownloads |
-| GPU管理页 | http://127.0.0.1:18773/ |
+| 项目 / 工作流视图 | http://127.0.0.1:18774/#projects / #workflows |
 | 可选旧 VPS 账号面板 | 远程127.0.0.1:18766（Toolkit 不依赖） |
 
 Toolkit设置不保存token、SSH私钥或OAuth。浏览器管理API仅回环监听，校验Host、Origin、会话token；没有任意shell或任意URL执行接口。部署自启后仍尊重Orca审核和手工禁用状态。
@@ -49,3 +50,7 @@ Toolkit设置不保存token、SSH私钥或OAuth。浏览器管理API仅回环监
 ## 更新到 1.1.0
 
 重新导入 `plugins/toolkit` 或运行安装器，然后在 Orca 插件页刷新，审核并启用新版。仍显示 Open accounts 的页面属于旧版，更新后刷新管理页，入口改为 Manage accounts。安装器不会重启 Orca；在方便时加载新版以免影响当前任务。旧 accounts.worktree 配置保留兼容，但不再参与账号打开。
+
+## 更新到 1.2.0
+
+运行 `node scripts/build-toolkit-ui.cjs`，然后 `node plugins/toolkit/Install.cjs`，或从 Orca 插件页重新导入该插件目录。刷新列表并按 Orca 提示审核/启用新版本。插件命令与原快捷键都进入统一页面；现有下载记录、连接配置、GPU 项目、Git 设置、工作流和许可保持不变。新版本无需重启 GPU 桥接服务。源文件 hash 改变可能要求重新审核，安装器不会绕过审核。

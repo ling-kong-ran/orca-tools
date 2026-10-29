@@ -3,10 +3,12 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {Controller}=require('./controller.cjs'),{launch}=require('./modules/downloads/runtime.cjs');
 const {DirectoryPicker}=require('./directory-picker.cjs'),preferences=require('./download-preferences.cjs');
 const {RemoteBrowser,validRemote}=require('./remote-browser.cjs');
+const {GpuAdmin}=require('./gpu-admin.cjs'),{compose}=require('./compose-ui.cjs');
 async function startServer(options){
  const controller=new Controller(options);await controller.initialize();const token=crypto.randomBytes(32).toString('hex');let port;
  const picker=options.directoryPicker||new DirectoryPicker(options.runtime);
  const remoteBrowser=options.remoteBrowser||new RemoteBrowser(options.runtime);
+ const gpuAdmin=options.gpuAdmin||new GpuAdmin();
  const server=http.createServer(async(req,res)=>{
   const origin='http://127.0.0.1:'+port;
   const send=(code,body,type='application/json; charset=utf-8')=>{const bytes=Buffer.from(typeof body==='string'?body:JSON.stringify(body));res.writeHead(code,{'Content-Type':type,'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${token}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});res.end(bytes);};
@@ -14,24 +16,31 @@ async function startServer(options){
    if(req.headers.host!==`127.0.0.1:${port}`)return send(403,{error:'Invalid Host.'});
    if(req.method==='GET'&&req.url==='/favicon.ico')return send(204,'');
    if(req.method==='GET'&&['/','/downloads/','/accounts/'].includes(req.url)){
-    let html=fs.readFileSync(path.join(__dirname,req.url==='/'?'index.html':req.url==='/accounts/'?'accounts.html':'modules/downloads/index.html'),'utf8');
-    if(req.url==='/downloads/')html=html.replaceAll("'/api/","'/api/downloads/").replace('<body>','<body><nav style="padding:16px 28px;border-bottom:1px solid #303949"><a style="color:#8cdeb9;text-decoration:none" href="/">← Orca Toolkit</a></nav>');
+    const html=compose(req.url==='/accounts/'?'accounts':req.url==='/downloads/'?'downloads':'overview');
     return send(200,html.replaceAll('__TOKEN__',token),'text/html; charset=utf-8');
    }
    if(req.headers['x-toolkit-token']!==token&&req.headers['x-download-token']!==token)return send(403,{error:'Session changed. Reload this page.'});
    if(req.method==='GET'&&req.url==='/api/accounts')return send(200,await controller.accountState());
    if(req.method==='GET'&&req.url==='/api/status')return send(200,await controller.status());
+   if(req.method==='GET'&&['/api/gpu/native','/api/gpu/workflows'].includes(req.url)){
+    if(!controller.settings.gpu.enabled)throw Error('GPU module is disabled.');
+    return send(200,await gpuAdmin.request(req.url.replace('/api/gpu/','/api/')));
+   }
    if(req.method==='GET'&&req.url==='/api/downloads/jobs')return send(200,{jobs:controller.requireDownloads().list(),defaultFolder:preferences.defaultFolder(options.dataDir,options.runtime.home),remoteLocation:preferences.remoteLocation(options.dataDir,controller.settings.downloads.environment)});
    if(req.method!=='POST')return send(404,{error:'Not found.'});
    if(req.headers.origin!==origin)return send(403,{error:'Invalid Origin.'});
    if(req.headers['content-type']?.split(';')[0]!=='application/json')return send(415,{error:'Expected JSON.'});
-   let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>16384)throw Error('Request too large.');chunks.push(chunk);}
+   let size=0;const limit=req.url==='/api/gpu/import'?4*1024*1024:16384;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit)throw Error('Request too large.');chunks.push(chunk);}
    const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Expected an object.');
    if(req.url==='/api/settings')return send(200,await controller.update(body));
    if(req.url==='/api/accounts/open')return send(200,await controller.openAccounts());
    if(req.url==='/api/accounts/refresh'){if(Object.keys(body).length)throw Error('Unexpected refresh option.');return send(200,await controller.accountState(true));}
    if(req.url==='/api/accounts/select')return send(200,await controller.selectAccount(body));
    if(req.url==='/api/gpu/open')return send(200,await controller.openGpu());
+   if(req.url.startsWith('/api/gpu/')){
+    if(!controller.settings.gpu.enabled)throw Error('GPU module is disabled.');
+    return send(200,await gpuAdmin.request(req.url.replace('/api/gpu/','/api/'),body));
+   }
    if(req.url==='/api/downloads/remote-browse'){
     controller.requireDownloads();
     if(Object.keys(body).some(k=>!['directory','showHidden','query','offset'].includes(k)))throw Error('Unexpected remote browser option.');
