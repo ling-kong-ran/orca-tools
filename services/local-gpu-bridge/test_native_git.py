@@ -36,6 +36,17 @@ class GitTests(unittest.TestCase):
   git=ProjectGit(self.control,self.project,self.mirror)
   for name in ('../outside','.git/config','C:/outside','folder/../a'):
    with self.assertRaises(ValueError):git.file(name)
+ def test_first_pull_initializes_a_clone_created_before_first_push(self):
+  empty=self.root/'unborn';self.cmd(['init','--initial-branch=main',str(empty)])
+  self.cmd(['remote','add','origin',str(self.remote)],empty)
+  project={**self.project,'root':str(empty)}
+  git=ProjectGit(self.control,project,empty)
+  self.assertIsNone(git.status()['head']);self.assertEqual(git.status()['tracked_changes'],0)
+  result=git.pull()
+  self.assertTrue(result['updated']);self.assertIsNone(result['previous_head'])
+  self.assertEqual((empty/'scene.txt').read_text(),'remote one')
+  self.assertEqual(git.status()['head'],self.cmd(['rev-parse','HEAD'],self.source).decode().strip())
+  self.assertFalse(git.pull()['updated'])
  def test_transient_windows_file_lock_is_retried_without_backup(self):
   (self.mirror/'scene.txt').write_text('local render edit')
   original=subprocess.run;attempts=[]

@@ -28,7 +28,11 @@ class ProjectGit:
         return result.stdout
     def names(self,args):return [p.decode('utf-8') for p in self.run(args).split(b'\0') if p]
     def status(self):
-        return {'branch':self.run(['branch','--show-current']).decode().strip(),'head':self.run(['rev-parse','HEAD']).decode().strip(),'tracked_changes':len(self.names(['diff','--name-only','-z','HEAD'])),'untracked_files':len(self.names(['ls-files','--others','--exclude-standard','-z'])),'remote':self.remote,'target_branch':self.branch,'auto_pull_before_render':self.settings.get('auto_pull_before_render',False)}
+        # A clone made before the first remote push has an unborn HEAD. This is
+        # a valid mirror awaiting its first fetch, not a credential failure.
+        head=self.run(['rev-parse','--revs-only','HEAD']).decode().strip() or None
+        changes=['diff','--name-only','-z','HEAD'] if head else ['diff','--cached','--name-only','-z']
+        return {'branch':self.run(['branch','--show-current']).decode().strip(),'head':head,'tracked_changes':len(self.names(changes)),'untracked_files':len(self.names(['ls-files','--others','--exclude-standard','-z'])),'remote':self.remote,'target_branch':self.branch,'auto_pull_before_render':self.settings.get('auto_pull_before_render',False)}
     def file(self,relative):
         parts=pathlib.PurePosixPath(relative).parts
         if not parts or relative.startswith('/') or '\\' in relative or ':' in relative or any(p in ('.','..','.git') for p in parts):raise ValueError('Unsafe Git project path.')
@@ -44,7 +48,7 @@ class ProjectGit:
     def pull(self,ident=None):
         before=self.status();target=self.fetch();ref='refs/remotes/'+self.remote+'/'+self.branch
         if before['branch']!=self.branch:raise ValueError('Local branch differs from the configured render branch. Select the matching branch locally first.')
-        changed=self.names(['diff','--name-only','-z','HEAD'])
+        changed=self.names(['diff','--name-only','-z','HEAD'] if before['head'] else ['diff','--cached','--name-only','-z'])
         # Validate changed and incoming paths before overwriting the render mirror.
         # Local changes are disposable; no archive, patch or backup ref is created.
         for name in changed:self.file(name)
