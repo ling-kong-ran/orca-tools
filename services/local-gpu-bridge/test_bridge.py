@@ -31,6 +31,17 @@ class Tests(unittest.TestCase):
         self.client=client_module.Client(self.client_config)
     def tearDown(self):self.server.shutdown();self.server.server_close();self.temp.cleanup()
     def submit(self):return self.client.call('run_workflow',{'workflow_id':'connection-test','parameters':{'color':123},'request_id':'b'*32})
+    def test_remote_boundary_filters_tripo_status_and_errors(self):
+        with unittest.mock.patch.object(self.bridge.tripo, 'status', return_value={
+            'connected': True, 'region': 'cn', 'timezone': 'Asia/Shanghai', 'public_ip': '198.51.100.9'}):
+            value = self.client.request('/v1/tripo/status')
+            self.assertEqual(value, {'connected': True})
+        with unittest.mock.patch.object(self.bridge.tripo, 'tools', side_effect=ValueError(
+            'Upload at https://s3.bj.bcebos.com/private?token=secret failed in Asia/Shanghai')):
+            with self.assertRaises(ValueError) as error: self.client.request('/v1/tripo/tools')
+            self.assertNotIn('bcebos', str(error.exception))
+            self.assertNotIn('secret', str(error.exception))
+            self.assertNotIn('Shanghai', str(error.exception))
     def test_auth_origin_peer_and_unknown_routes(self):
         for headers in [{},{'Authorization':'Bearer '+'a'*64,'Origin':'https://foreign.invalid'}]:
             with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(urllib.request.Request(self.url+'/v1/status',headers=headers))

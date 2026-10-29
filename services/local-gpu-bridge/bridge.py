@@ -5,6 +5,7 @@ import urllib.parse, urllib.request, uuid, shutil
 from workflow_library import WorkflowLibrary
 from native_control import NativeControl
 from native_tripo import TripoControl
+from remote_privacy import remote_json
 from job_reuse import latest_attempt, attempt_fields
 
 SLUG = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
@@ -268,12 +269,15 @@ class Bridge:
 def make_handler(bridge):
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
+        server_version = 'LocalBridge'
+        sys_version = ''
         def setup(self):
             super().setup(); self.connection.settimeout(90)
         def log_message(self, fmt, *args): pass  # No tokens, prompts or filenames in request logs.
         def send_json(self, status, value):
             if getattr(self, 'reply_started', False): self.close_connection = True; return
             self.reply_started = True
+            value = remote_json(value, resources=urllib.parse.urlsplit(self.path).path.startswith('/v1/tripo/'))
             data = json.dumps(value, ensure_ascii=False).encode()
             self.send_response(status); self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(data))); self.send_header('Cache-Control', 'no-store')

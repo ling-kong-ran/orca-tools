@@ -6,7 +6,7 @@ handles, never as Windows paths. The China site (studio.tripo3d.com) serves the 
 other hosts, so region "cn" runs a copy of the plugin with its site addresses and loopback port
 changed, with its own data directory, browser profile and debug port.
 """
-import base64, hashlib, json, logging, os, pathlib, re, shutil, socket, subprocess, threading, time
+import base64, datetime, hashlib, json, logging, os, pathlib, re, shutil, socket, subprocess, threading, time, uuid
 
 HOME = pathlib.Path(os.environ.get('USERPROFILE') or pathlib.Path.home())
 LOCAL = pathlib.Path(os.environ.get('LOCALAPPDATA') or HOME / 'AppData/Local')
@@ -17,7 +17,16 @@ REGIONS = {
     'cn': {'studio': 'https://studio.tripo3d.com', 'api': 'https://api-cn.tripo3d.com', 'account': 'https://www.tripo3d.com',
            'port': 32176, 'cdp': 9223, 'data': 'TripoStudioMCP-cn'},
 }
-PATCH_VERSION = 4
+PATCH_VERSION = 5
+SCHEDULER_PATCHES = [
+    ('var MAX_CONCURRENCY = 10;', 'var MAX_CONCURRENCY = 3;'),
+    ('current.consecutive_accepted += 1;', 'current.consecutive_accepted = Math.min(5, current.consecutive_accepted + 1);'),
+    ('current.consecutive_congestion += 1;', 'current.consecutive_congestion = Math.min(1000, current.consecutive_congestion + 1);'),
+    ('return clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState());',
+     'return clone8({ ...(document2.accounts[accountFingerprint] ?? defaultSchedulerState()), concurrency_limit: 3 });'),
+    ('const state2 = clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState());',
+     'const state2 = clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState()); state2.concurrency_limit = 3;'),
+]
 UPLOAD_CLIENT = '            useAccelerateEndpoint: transport.useAccelerateEndpoint'
 CN_UPLOAD_CLIENT = UPLOAD_CLIENT + ''',
             ...(() => {
@@ -84,6 +93,9 @@ def ascii_text(value):
 
 def english_tool(tool):
     tool = ascii_text(tool)
+    # Upstream output schemas describe private account/environment fields that
+    # this bridge deliberately removes from structured results.
+    tool.pop('outputSchema', None)
     tool['description'] = TOOL_TEXT.get(tool.get('name'), tool.get('description') or 'Tripo Studio tool.')
     return tool
 
@@ -122,7 +134,7 @@ def patches(region):
     port = (f'var TRIPO_MCP_HTTP_PORT = {base["port"]};', f'var TRIPO_MCP_HTTP_PORT = {site["port"]};')
     host = lambda url: url.split('//', 1)[1]
     return {
-        'mcp/server.mjs': [(UPLOAD_CLIENT, CN_UPLOAD_CLIENT), (ACTION_READ, RECOVER_ACTION_READ),
+        'mcp/server.mjs': SCHEDULER_PATCHES + [(UPLOAD_CLIENT, CN_UPLOAD_CLIENT), (ACTION_READ, RECOVER_ACTION_READ),
                            (f'var STUDIO_ORIGIN = "{base["studio"]}";', f'var STUDIO_ORIGIN = "{site["studio"]}";'),
                            (f'var STUDIO_API_BASE_URL = "{base["api"]}";', f'var STUDIO_API_BASE_URL = "{site["api"]}";'),
                            (f'var TRIPO_ACCOUNT_ORIGIN = "{base["account"]}";', f'var TRIPO_ACCOUNT_ORIGIN = "{site["account"]}";'),
@@ -180,6 +192,7 @@ class TripoControl:
         self.roots = {'inputs': assets / 'bridge-inputs', 'assets': assets, 'archive': self.data_dir / 'archive'}
         self.command = command
         self.process = None; self.lock = threading.Lock(); self.start_lock = threading.Lock()
+        self.alias_lock = threading.Lock()
         self.pending = {}; self.next_id = 1
 
     def plugin_root(self):
@@ -212,7 +225,7 @@ class TripoControl:
         return target
 
     def environment(self):
-        env = dict(os.environ, NODE_USE_ENV_PROXY='1', TRIPO_DATA_DIR=str(self.data_dir), TRIPO_REUSE_BROWSER_SESSION='1',
+        env = dict(os.environ, TZ='UTC', NODE_USE_ENV_PROXY='1', TRIPO_DATA_DIR=str(self.data_dir), TRIPO_REUSE_BROWSER_SESSION='1',
                    TRIPO_CHROME_CDP_URL=f'http://127.0.0.1:{self.site["cdp"]}')
         if self.region=='cn':env['TRIPO_COOKIE_ONLY']='1'
         # Pin the browser so the dedicated profile is never opened by two different browsers.
@@ -285,7 +298,7 @@ class TripoControl:
     def to_local(self, value):
         if isinstance(value, str):
             match = HANDLE.fullmatch(value)
-            return str(inside(self.roots[match[1]], match[2])) if match else value
+            return str(inside(self.roots[match[1]], self.resolve_input_alias(match[2]) if match[1] == 'inputs' else match[2])) if match else value
         if isinstance(value, list): return [self.to_local(v) for v in value]
         if isinstance(value, dict): return {k: self.to_local(v) for k, v in value.items()}
         return value
@@ -303,7 +316,44 @@ class TripoControl:
             pattern = sep.join(re.escape(p) for p in parts) + r'(?=[\\/"\s]|$)((?:' + sep + r'[^"\\/\n\r]+)*)'
             text = re.sub(pattern, lambda m: 'tripo:' + name + '/' + '/'.join(p for p in re.split(r'[\\/]+', m[1]) if p),
                           text, flags=re.IGNORECASE)
+        text = re.sub(r'tripo:inputs/(\d{8}-\d{6}-[A-Za-z0-9._-]+)',
+                      lambda m: 'tripo:inputs/' + self.input_alias(m[1]), text)
+        # Non-path source_name fields may also echo the legacy service prefix.
+        text = re.sub(r'(?<=["\\])\d{8}-\d{6}-([A-Za-z0-9._-]+)(?=["\\])', r'uploaded-\1', text)
         return text
+
+    def input_aliases(self):
+        try: return json.loads((self.runtime_dir / 'input-aliases.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError): return {}
+
+    def resolve_input_alias(self, relative):
+        return self.input_aliases().get(relative, relative)
+
+    def input_alias(self, relative):
+        with self.alias_lock:
+            aliases = self.input_aliases()
+            for alias, original in aliases.items():
+                if original == relative: return alias
+            alias = uuid.uuid4().hex + '-' + re.sub(r'^\d{8}-\d{6}-', '', relative)
+            aliases[alias] = relative
+            self.runtime_dir.mkdir(parents=True, exist_ok=True)
+            staged = self.runtime_dir / ('input-aliases.' + uuid.uuid4().hex + '.tmp')
+            staged.write_text(json.dumps(aliases), encoding='utf-8')
+            staged.replace(self.runtime_dir / 'input-aliases.json')
+            return alias
+
+    def public_times(self, value):
+        if isinstance(value, list): return [self.public_times(v) for v in value]
+        if isinstance(value, dict):
+            return {k: 'UTC' if k.lower() in ('timezone', 'time_zone', 'timezone_id') else self.public_times(v) for k, v in value.items()}
+        if isinstance(value, str):
+            try:
+                nested = json.loads(value)
+                if isinstance(nested, (dict, list)): return json.dumps(self.public_times(nested), ensure_ascii=False)
+            except (ValueError, TypeError): pass
+            if re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)', value):
+                return datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+        return value
 
     def gallery_files(self):
         try:
@@ -343,7 +393,32 @@ class TripoControl:
             self.stop()
             if name.startswith(('tripo_get_', 'tripo_list_')): result = self._call(name, arguments)
         if name == 'tripo_get_workflow_capabilities': result = english_capabilities(result)
-        return json.loads(self.to_handles(json.dumps(result, ensure_ascii=False)))
+        if name == 'tripo_get_status': result = self.necessary_status(result)
+        return self.public_times(json.loads(self.to_handles(json.dumps(result, ensure_ascii=False))))
+
+    def necessary_status(self, result):
+        def minimize(status):
+            if not isinstance(status, dict): return status
+            if 'session' not in status and 'scheduler' not in status: return status
+            output = {'session': {'authenticated': bool(status.get('session', {}).get('authenticated'))}}
+            if isinstance(status.get('scheduler'), dict):
+                output['scheduler'] = {k: status['scheduler'][k] for k in
+                    ('accepting', 'queued', 'running', 'concurrencyLimit', 'failed', 'succeeded') if k in status['scheduler']}
+            if isinstance(status.get('watchdog'), dict):
+                output['watchdog'] = {k: status['watchdog'][k] for k in ('state', 'running') if k in status['watchdog']}
+            balance = status.get('balance', {})
+            if isinstance(balance, dict):
+                wallet = balance.get('summary', {}).get('wallet', {})
+                output['balance'] = {'available': bool(balance.get('available')),
+                    'credits': {k: wallet[k] for k in ('total_credit', 'expiring_credit') if k in wallet}}
+            return output
+        result = dict(result)
+        if 'structuredContent' in result: result['structuredContent'] = minimize(result['structuredContent'])
+        for item in result.get('content', []):
+            if isinstance(item, dict) and item.get('type') == 'text':
+                try: item['text'] = json.dumps(minimize(json.loads(item['text'])), ensure_ascii=False)
+                except ValueError: pass
+        return result
 
     def _call(self, name, arguments):
         self.ensure_started()
@@ -359,14 +434,15 @@ class TripoControl:
         content = base64.b64decode(content_base64, validate=True)
         if len(content) > 40 * 1024**2: raise ValueError('Tripo upload exceeds 40 MB.')
         self.roots['inputs'].mkdir(parents=True, exist_ok=True)
-        stamped = time.strftime('%Y%m%d-%H%M%S-') + filename
+        stamped = uuid.uuid4().hex + '-' + filename
         (self.roots['inputs'] / stamped).write_bytes(content)
         return {'path': 'tripo:inputs/' + stamped, 'bytes': len(content)}
 
     def file(self, handle):
         match = HANDLE.fullmatch(handle or '')
         if not match: raise ValueError('Use a tripo:inputs|assets|archive/... handle.')
-        relative = self.gallery_files().get(match[2], match[2]) if match[1] == 'archive' else match[2]
+        relative = (self.gallery_files().get(match[2], match[2]) if match[1] == 'archive'
+                    else self.resolve_input_alias(match[2]) if match[1] == 'inputs' else match[2])
         target = inside(self.roots[match[1]], relative)
         if not target.is_file(): raise ValueError('Tripo file not found.')
         return target

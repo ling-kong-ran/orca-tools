@@ -21,7 +21,7 @@ SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STU
                     '`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
                     'session2.status().authenticated || credentialStatus?.state === "available"',
                     'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
-                    native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ])
+                    native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ] + [old for old, _ in native_tripo.SCHEDULER_PATCHES])
 
 
 class TripoTests(unittest.TestCase):
@@ -68,6 +68,53 @@ if(r.count!==(owned&&['submitted','queued','running'].includes(status)?1:0))thro
         self.control.ensure_started()
         with unittest.mock.patch.object(self.control, 'login_active', return_value=True):
             with self.assertRaisesRegex(ValueError, 'sign-in is in progress'): self.control.ensure_started()
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_scheduler_counters_stay_valid_after_many_acceptances_and_congestions(self):
+        patches = dict(native_tripo.SCHEDULER_PATCHES)
+        code = '''const current={concurrency_limit:3,consecutive_accepted:0,consecutive_congestion:0};
+for(let i=0;i<5000;i++){''' + patches['current.consecutive_accepted += 1;'] + patches['current.consecutive_congestion += 1;'] + '''
+if(current.consecutive_accepted>5||current.consecutive_congestion>1000)throw Error('State schema overflow');}
+if(current.consecutive_accepted!==5||current.consecutive_congestion!==1000)throw Error('Incorrect saturation');
+function legacy(){const document2={accounts:{a:{concurrency_limit:10,consecutive_accepted:5}}};const accountFingerprint='a';const clone8=x=>({...x});const defaultSchedulerState=()=>({});
+''' + patches['return clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState());'] + '''}
+if(legacy().concurrency_limit!==3)throw Error('Legacy concurrency was not clamped');
+'''
+        subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
+
+    def test_public_times_are_utc_and_upload_names_have_no_local_timestamp(self):
+        raw = {'created_at': '2026-10-29T11:22:23+08:00', 'timezone': 'Asia/Shanghai',
+               'nested': json.dumps({'time': '2026-10-29T12:00:00+08:00'}), 'other': 'keep'}
+        public = self.control.public_times(raw)
+        self.assertEqual(public['created_at'], '2026-10-29T03:22:23Z')
+        self.assertEqual(public['timezone'], 'UTC')
+        self.assertEqual(json.loads(public['nested'])['time'], '2026-10-29T04:00:00Z')
+        uploaded = self.control.upload('image.png', base64.b64encode(b'png').decode())
+        self.assertRegex(uploaded['path'], r'^tripo:inputs/[a-f0-9]{32}-image\.png$')
+
+    def test_legacy_upload_handles_are_opaque_and_still_downloadable(self):
+        folder = self.control.roots['inputs']; folder.mkdir(parents=True)
+        old = '20261029-031037-concept.png'; (folder / old).write_bytes(b'png')
+        returned = json.loads(self.control.to_handles(json.dumps({'path': str(folder / old), 'source_name': old})))
+        self.assertNotIn('20261029-031037', json.dumps(returned))
+        self.assertEqual(self.control.file(returned['path']).read_bytes(), b'png')
+        self.assertEqual(self.control.to_local(returned['path']), str(folder / old))
+        restored = TripoControl(self.config)
+        self.assertEqual(restored.file(returned['path']).read_bytes(), b'png')
+        self.assertEqual(self.control.file('tripo:inputs/' + old).read_bytes(), b'png')
+
+    def test_status_keeps_only_auth_queue_and_credit_information(self):
+        raw = {'session': {'authenticated': True, 'source': 'cookie', 'device_id_available': True},
+               'gallery': {'local_address': 'http://127.0.0.1:1'}, 'credential': 'native',
+               'balance': {'available': True, 'summary': {'member': {'type': 'private'},
+                  'wallet': {'total_credit': 12, 'expiring_credit': 2}}},
+               'scheduler': {'running': 1, 'queued': 0, 'concurrencyLimit': 3}}
+        result = self.control.necessary_status({'structuredContent': raw, 'content': [{'type': 'text', 'text': json.dumps(raw)}]})
+        status = result['structuredContent']
+        self.assertEqual(status['session'], {'authenticated': True})
+        self.assertEqual(status['balance']['credits']['total_credit'], 12)
+        self.assertNotIn('gallery', status); self.assertNotIn('credential', status)
+        self.assertEqual(json.loads(result['content'][0]['text']), status)
 
     def test_account_tools_stay_on_the_pc(self):
         listed = self.control.tools()

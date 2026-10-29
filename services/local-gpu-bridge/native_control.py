@@ -1,6 +1,7 @@
 """Project-scoped synchronization and typed native MCP operations; no shell API."""
 import base64,copy,hashlib,ipaddress,json,math,os,pathlib,re,shutil,socket,subprocess,threading,time,uuid
 from native_process import EgressGuard,ManagedProcess
+from remote_privacy import remote_text
 
 HEX=re.compile(r'^[a-f0-9]{32}$');SHA=re.compile(r'^[a-f0-9]{64}$')
 DENY_PARTS={'.git','.godot','.svn','node_modules','__pycache__','.ssh','.codex','.claude','.agent_bridge','saves'}
@@ -39,7 +40,7 @@ def private_text(value):
     for name in {socket.gethostname(),os.environ.get('COMPUTERNAME',''),os.environ.get('USERNAME','')}:
         if len(name)>=3:value=re.sub(r'(?i)(?<!\w)'+re.escape(name)+r'(?!\w)','[local identity]',value)
     value=re.sub(r'(?i)\b(?:NVIDIA\s+(?:GeForce\s+)?(?:RTX|GTX|Tesla|Quadro)[^\n\r\"\',;]*|AMD\s+Radeon[^\n\r\"\',;]*|Intel\s+(?:Arc|Core|Xeon)[^\n\r\"\',;]*)','[hardware]',value)
-    return value
+    return remote_text(value)
 def private_result(value):
     # Results never include app logs, executable paths, system versions or arbitrary tool output.
     if isinstance(value,dict):return {k:private_result(v) for k,v in value.items() if k.lower() not in PRIVATE_KEYS}
