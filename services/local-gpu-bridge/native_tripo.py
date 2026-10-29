@@ -17,7 +17,21 @@ REGIONS = {
     'cn': {'studio': 'https://studio.tripo3d.com', 'api': 'https://api-cn.tripo3d.com', 'account': 'https://www.tripo3d.com',
            'port': 32176, 'cdp': 9223, 'data': 'TripoStudioMCP-cn'},
 }
-PATCH_VERSION = 3
+PATCH_VERSION = 4
+UPLOAD_CLIENT = '            useAccelerateEndpoint: transport.useAccelerateEndpoint'
+CN_UPLOAD_CLIENT = UPLOAD_CLIENT + ''',
+            ...(() => {
+              const host = String(token.host ?? "").replace(/^https:\\/\\//, "").replace(/\\/$/, "");
+              const match = /^s3\\.(bj|gz|su|bd|fwh|hkg|cd|fsh)\\.bcebos\\.com$/.exec(host);
+              if (!match) throw new TripoError("REMOTE_SCHEMA_CHANGED", "China-site storage returned an unsupported endpoint.", { stage: "upload" });
+              return { endpoint: "https://" + host, region: match[1], forcePathStyle: true, useAccelerateEndpoint: false };
+            })()'''
+ACTION_READ = '''    const binding = await this.#index.get(actionId);
+    return await this.#publicAction(binding, await this.#backendSnapshot(binding));'''
+RECOVER_ACTION_READ = '''    const binding = await this.#index.get(actionId);
+    const snapshot = await this.#backendSnapshot(binding);
+    if (["submitted", "queued", "running"].includes(snapshot.status) && this.#ownsBindingAccount(binding)) this.#observe(binding);
+    return await this.#publicAction(binding, snapshot);'''
 # Credentials, account switching and the local gallery never cross the bridge.
 HIDDEN = {'tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery'}
 HANDLE = re.compile(r'tripo:(inputs|assets|archive)/([^\x00-\x1f"<>|?*]{1,512})')
@@ -108,7 +122,8 @@ def patches(region):
     port = (f'var TRIPO_MCP_HTTP_PORT = {base["port"]};', f'var TRIPO_MCP_HTTP_PORT = {site["port"]};')
     host = lambda url: url.split('//', 1)[1]
     return {
-        'mcp/server.mjs': [(f'var STUDIO_ORIGIN = "{base["studio"]}";', f'var STUDIO_ORIGIN = "{site["studio"]}";'),
+        'mcp/server.mjs': [(UPLOAD_CLIENT, CN_UPLOAD_CLIENT), (ACTION_READ, RECOVER_ACTION_READ),
+                           (f'var STUDIO_ORIGIN = "{base["studio"]}";', f'var STUDIO_ORIGIN = "{site["studio"]}";'),
                            (f'var STUDIO_API_BASE_URL = "{base["api"]}";', f'var STUDIO_API_BASE_URL = "{site["api"]}";'),
                            (f'var TRIPO_ACCOUNT_ORIGIN = "{base["account"]}";', f'var TRIPO_ACCOUNT_ORIGIN = "{site["account"]}";'),
                            (f':{host(base["studio"])}`', f':{host(site["studio"])}`'),
@@ -232,8 +247,8 @@ class TripoControl:
 
     def ensure_started(self):
         with self.start_lock:
-            if self.process is not None and self.process.poll() is None: return
             if self.login_active(): raise ValueError('Tripo Studio sign-in is in progress on the GPU computer. Try again after it finishes.')
+            if self.process is not None and self.process.poll() is None: return
             if self.command: command, cwd = self.command, None
             else: command, cwd = ['node', './mcp/bootstrap.mjs'], str(self.runtime_root())
             # The bootstrap keeps the plugin's singleton backend (session, headless browser,

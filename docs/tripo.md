@@ -34,6 +34,10 @@ python scripts/install-tripo.py
 
 可选字段：`plugin_cache`（插件缓存目录）、`data_dir`、`asset_root`（默认 `Documents\TripoStudio`，上传的图放在其中的 `bridge-inputs`）、`browser`（固定用哪个浏览器）。
 
+国内站上传使用临时令牌返回的百度 BOS S3 兼容地址，校验域名并按区域签名，不使用 AWS 加速端点。依据：[BOS 服务域名](https://intl.cloud.baidu.com/en/doc/BOS/s/xjwvyq9l4-intl-en)。未知存储地址会明确拒绝，避免把临时凭据发送到任意主机。
+
+服务重启后，读取已有的运行中 Action 会恢复后台观察器，只查询既有任务，不重发生成请求。取消工作流会停止本机后续步骤；已提交的云端任务可能无法取消，取消结果中的提示为准，不代表退款。
+
 ## 自启动
 
 配置了 `tripo` 时，桥启动就把 Tripo 插件的后台拉起来，之后每分钟检查一次，挂了就重启；登录脚本运行期间暂停，不和登录窗口抢 profile。桥本身随 Windows 登录启动，[登录助手](../tools/orca-startup/) 掉线时会拉起桥，并在 `startup.log` 里记录 `tripo` 状态（`connected`、`starting`、`not-installed`、`unavailable`）。

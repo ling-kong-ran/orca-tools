@@ -1,4 +1,4 @@
-import base64, json, pathlib, sys, tempfile, textwrap, unittest, unittest.mock
+import base64, json, pathlib, sys, tempfile, textwrap, unittest, unittest.mock, shutil, subprocess
 import native_tripo
 from native_tripo import TripoControl, REGIONS
 
@@ -20,7 +20,8 @@ SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STU
                     'var TRIPO_MCP_HTTP_PORT = 32175;', 'var ALLOWED = ["tripo3d.ai", "tripo3d.com"];',
                     '`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
                     'session2.status().authenticated || credentialStatus?.state === "available"',
-                    'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();'])
+                    'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
+                    native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ])
 
 
 class TripoTests(unittest.TestCase):
@@ -36,6 +37,37 @@ class TripoTests(unittest.TestCase):
                        'data_dir': str(self.root / 'data'), 'asset_root': str(self.root / 'assets')}}
         self.control = TripoControl(self.config, command=[sys.executable, str(fake)])
         self.addCleanup(self.control.stop)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_china_storage_endpoint_is_pinned_and_disables_aws_acceleration(self):
+        code = '''const TripoError=Error;const transport={useAccelerateEndpoint:true};
+function options(host){const token={host};return {''' + native_tripo.CN_UPLOAD_CLIENT + '''};}
+const good=options('https://s3.bj.bcebos.com/');
+if(good.endpoint!=='https://s3.bj.bcebos.com'||good.region!=='bj'||!good.forcePathStyle||good.useAccelerateEndpoint)throw Error('Invalid BOS configuration');
+for(const host of ['https://example.com','s3.bj.bcebos.com.evil.test','http://s3.bj.bcebos.com','s3.bj.bcebos.com/path']){
+let rejected=false;try{options(host)}catch{rejected=true}if(!rejected)throw Error('Unsafe endpoint accepted');}
+'''
+        subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_recovered_action_reads_resume_only_existing_owned_operations(self):
+        code = '''class Recovered {
+#index={get:async()=>({})};count=0;status='running';owned=true;
+async #backendSnapshot(){return {status:this.status}}
+#ownsBindingAccount(){return this.owned}
+#observe(){this.count++}
+async #publicAction(binding,snapshot){return snapshot}
+async get(actionId){''' + native_tripo.RECOVER_ACTION_READ + '''}}
+for(const status of ['submitted','queued','running','staged','committing','failed','cancelled','succeeded']){
+for(const owned of [true,false]){const r=new Recovered();r.status=status;r.owned=owned;await r.get('existing');
+if(r.count!==(owned&&['submitted','queued','running'].includes(status)?1:0))throw Error('Unsafe recovery');}}
+'''
+        subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
+
+    def test_login_lock_blocks_calls_even_with_a_live_bootstrap(self):
+        self.control.ensure_started()
+        with unittest.mock.patch.object(self.control, 'login_active', return_value=True):
+            with self.assertRaisesRegex(ValueError, 'sign-in is in progress'): self.control.ensure_started()
 
     def test_account_tools_stay_on_the_pc(self):
         listed = self.control.tools()
