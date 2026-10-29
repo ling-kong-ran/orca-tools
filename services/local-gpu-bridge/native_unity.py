@@ -7,6 +7,7 @@ import re
 import subprocess
 import threading
 from collections import Counter
+from native_unity_commands import TOOLS as QUALIFIED_TOOLS, BY_NAME, invoke
 from native_control import inside
 
 # No general shell, C# eval, machine diagnostics, account management, or desktop fallback.
@@ -146,7 +147,7 @@ class UnityControl:
                 # Never route an ambiguous "run" to a different command group.
                 if counts[name] != 1 or DENIED.search(name) or name in DENIED_NAMES: continue
                 tools.append({k:entry[k] for k in ('name','description','inputSchema') if k in entry})
-            return {'tools':tools}
+            return {'tools':tools + QUALIFIED_TOOLS}
 
     def call(self, project_id, name, arguments=None):
         if not isinstance(name,str) or DENIED.search(name) or name in DENIED_NAMES: raise ValueError('This Unity tool is not exposed.')
@@ -155,6 +156,7 @@ class UnityControl:
         with self.lock:
             exposed = {tool['name'] for tool in self.tools(project_id)['tools']}
             if name not in exposed: raise ValueError('Read unity_tools and use an exposed tool name.')
+            if name in BY_NAME: return invoke(self, project_id, name, arguments)
             try: return self._send('tools/call',{'name':name,'arguments':arguments})
             except (OSError, BrokenPipeError):
                 logging.exception('Unity MCP transport stopped')

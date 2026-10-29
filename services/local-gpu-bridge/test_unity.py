@@ -74,7 +74,9 @@ for line in sys.stdin:
             return real_popen([sys.executable,str(script)],**kwargs)
         self.control.start('approved')
         with patch('native_unity.subprocess.Popen',side_effect=spawn):
-            self.assertEqual([t['name'] for t in self.control.tools('approved')['tools']],['scene_info'])
+            names=[t['name'] for t in self.control.tools('approved')['tools']]
+            self.assertIn('scene_info',names);self.assertIn('console.get',names)
+            self.assertNotIn('run',names);self.assertNotIn('batch',names)
             self.assertFalse(self.control.call('approved','scene_info').get('isError',False))
             with self.assertRaises(ValueError):self.control.call('approved','unknown')
             with self.assertRaises(ValueError):self.control.call('approved','run')
