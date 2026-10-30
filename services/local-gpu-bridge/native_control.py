@@ -88,7 +88,15 @@ class NativeControl:
             row['allow_scripts']=p.get('allow_scripts',False)
             row['git']={k:p.get('git',{}).get(k,d) for k,d in [('enabled',False),('remote','origin'),('branch','main'),('auto_pull_before_render',False)]}
             row['sync_method']='git' if row['git']['enabled'] else 'disabled'
-            if local:row.update(root=p['root'],godot_subdir=p.get('godot_subdir','client'),unity_subdir=p.get('unity_subdir',''))
+            if local:
+                row.update(root=p['root'],godot_subdir=p.get('godot_subdir','client'),unity_subdir=p.get('unity_subdir',''),project_types=[])
+                root=pathlib.Path(p['root']).resolve()
+                for engine,subdir in [('godot',row['godot_subdir']),('godot',''),('unity',row['unity_subdir'])]:
+                    try:
+                        folder=inside(root,subdir) if subdir else root
+                        valid=(folder/'project.godot').is_file() if engine=='godot' else all((folder/name).is_dir() for name in ('Assets','Packages','ProjectSettings'))
+                        if valid and engine not in row['project_types']:row['project_types'].append(engine)
+                    except (OSError,ValueError):pass
             values.append(row)
         return values
     def project(self,ident):

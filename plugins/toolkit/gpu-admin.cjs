@@ -1,5 +1,6 @@
 'use strict';
 const http=require('node:http');
+const {projectTypes}=require('./project-types.cjs');
 const GET=new Set(['/api/native','/api/workflows']);
 const POST=new Set(['/api/native/project','/api/native/stop-blender','/api/native/setup','/api/native/git','/api/native/unity-start','/api/native/unity-stop','/api/import']);
 class GpuAdmin {
@@ -18,7 +19,9 @@ class GpuAdmin {
   const reply=await this.exchange(route,body,this.token);
   if(reply.status===403){this.token=null;throw Error('GPU session changed. Refresh this view before retrying.');}
   let data;try{data=JSON.parse(reply.text);}catch{throw Error('GPU bridge returned an invalid response.');}
-  if(reply.status!==200&&reply.status!==201)throw Error(data.error||'GPU request failed.');return data;
+  if(reply.status!==200&&reply.status!==201)throw Error(data.error||'GPU request failed.');
+  if(route==='/api/native'&&Array.isArray(data.projects))data.projects=data.projects.map(p=>({...p,project_types:projectTypes(p)}));
+  return data;
  }
 }
 module.exports={GpuAdmin};
