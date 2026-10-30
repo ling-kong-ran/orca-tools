@@ -3,10 +3,12 @@ const fs=require('node:fs'),path=require('node:path');
 const settings=require('./settings.cjs'),{DownloadManager}=require('./modules/downloads/engine.cjs');
 const {validate:validateDownload}=require('./modules/downloads/settings.cjs');
 const {Accounts}=require('./modules/accounts.cjs'),{Gpu}=require('./modules/gpu.cjs');
+const {AccountPreferences}=require('./account-preferences.cjs');
 class Controller {
  constructor(options){
   this.options=options;this.runtime=options.runtime;this.root=options.dataDir;this.downloads=null;this.downloadError='';this.settingsError='';
   this.accounts=options.accounts||new Accounts(this.runtime);this.gpu=options.gpu||new Gpu(this.runtime);this.loading=null;
+  this.accountPreferences=new AccountPreferences(this.root);
   try{this.settings=settings.load(this.root,this.runtime.local);}catch{this.settings=settings.defaults();this.settingsError='Settings could not be loaded. Save valid settings to repair them.';}
  }
  async initialize(){await this.configureDownloads();}
@@ -53,8 +55,17 @@ class Controller {
  requireDownloads(){if(!this.downloads||!this.settings.downloads.enabled)throw Error(this.downloadError||'Downloads module is disabled.');return this.downloads;}
  requireAccounts(){if(!this.settings.accounts.enabled)throw Error('Accounts module is disabled.');return this.settings.accounts;}
  async openAccounts(){this.requireAccounts();return {opened:true,url:'/accounts/'};}
- async accountState(refreshUsage=false){const settings=this.requireAccounts();const state=await this.accounts.list(settings,refreshUsage);if(this.settings.accounts!==settings)throw Error('Remote connection changed. Refresh accounts.');return state;}
- async selectAccount(body){const settings=this.requireAccounts();return this.accounts.select(settings,body,()=>this.settings.accounts===settings&&settings.enabled);}
+ async accountState(refreshUsage=false){const settings=this.requireAccounts();const state=await this.accounts.list(settings,refreshUsage);if(this.settings.accounts!==settings)throw Error('Remote connection changed. Refresh accounts.');return this.accountPreferences.apply(settings.environment,state);}
+ async setAccountDisabled(body){
+  if(Object.keys(body).some(k=>!['accountId','disabled'].includes(k))||typeof body.accountId!=='string'||!body.accountId||body.accountId.length>200||typeof body.disabled!=='boolean')throw Error('Invalid account preference.');
+  const settings=this.requireAccounts(),state=await this.accountState();
+  if(this.settings.accounts!==settings)throw Error('Remote connection changed. Refresh accounts.');
+  if(this.accounts.switching)throw Error('An account switch is in progress. Refresh shortly.');
+  if(!state.accounts.some(a=>a.id===body.accountId))throw Error('Account not found. Refresh to try again.');
+  this.accountPreferences.set(settings.environment,body.accountId,body.disabled);
+  return this.accountPreferences.apply(settings.environment,state);
+ }
+ async selectAccount(body){const settings=this.requireAccounts();if(this.accountPreferences.disabled(settings.environment,body.accountId))throw Error('Account is disabled. Enable it before switching.');const state=await this.accounts.select(settings,body,()=>this.settings.accounts===settings&&settings.enabled&&!this.accountPreferences.disabled(settings.environment,body.accountId));return this.accountPreferences.apply(settings.environment,state);}
  async openGpu(){if(!this.settings.gpu.enabled)throw Error('GPU module is disabled.');return this.gpu.open();}
  async close(){if(this.loading)await this.loading.catch(()=>{});if(this.downloads)await this.downloads.close();}
 }

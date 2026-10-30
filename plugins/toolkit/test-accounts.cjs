@@ -13,4 +13,16 @@ test('local accounts page uses authenticated remote RPC, not browser tabs',async
  assert.equal((await fetch(server.url+'api/accounts/select',{method:'POST',headers:{...headers,Origin:'https://bad.invalid'},body:'{}'})).status,403);
  const refresh=await fetch(server.url+'api/accounts/refresh',{method:'POST',headers,body:'{}'});assert.equal(refresh.status,200);assert.equal(f.calls.at(-1)[1].refreshUsage,true);
  const selected=await fetch(server.url+'api/accounts/select',{method:'POST',headers,body:JSON.stringify({accountId:'b',expectedActiveAccountId:'a'})});assert.equal(selected.status,200);assert.equal((await selected.json()).activeAccountId,'b');
+ const disable=async body=>fetch(server.url+'api/accounts/disable',{method:'POST',headers,body:JSON.stringify(body)});
+ assert.equal((await disable({accountId:'missing',disabled:true})).status,400);
+ assert.equal((await disable({accountId:'a',disabled:'yes'})).status,400);
+ const disabled=await disable({accountId:'a',disabled:true});assert.equal(disabled.status,200);assert.equal((await disabled.json()).accounts[0].disabled,true);
+ const before=f.calls.filter(c=>c[0]==='accounts.selectClaude').length;
+ const blocked=await fetch(server.url+'api/accounts/select',{method:'POST',headers,body:JSON.stringify({accountId:'a',expectedActiveAccountId:'b'})});assert.equal(blocked.status,400);assert.match((await blocked.json()).error,/disabled/);assert.equal(f.calls.filter(c=>c[0]==='accounts.selectClaude').length,before);
+ const {AccountPreferences}=require('./account-preferences.cjs'),persisted=new AccountPreferences(root);assert.equal(persisted.disabled('remote','a'),true);assert.equal(persisted.disabled('other','a'),false);
+ await server.controller.update({...server.controller.settings});assert.equal((await server.controller.accountState()).accounts[0].disabled,true);
+ await disable({accountId:'a',disabled:false});assert.equal(new AccountPreferences(root).disabled('remote','a'),false);
+ const enabled=await fetch(server.url+'api/accounts/select',{method:'POST',headers,body:JSON.stringify({accountId:'a',expectedActiveAccountId:'b'})});assert.equal(enabled.status,200);
+ await disable({accountId:'a',disabled:true});assert.equal((await server.controller.accountState()).activeAccountId,'a');
+ f.accounts.switching=true;assert.equal((await disable({accountId:'b',disabled:true})).status,400);f.accounts.switching=false;
  }finally{await server.close();fs.rmSync(root,{recursive:true,force:true});}});

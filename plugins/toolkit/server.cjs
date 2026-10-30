@@ -36,6 +36,7 @@ async function startServer(options){
    if(req.url==='/api/accounts/open')return send(200,await controller.openAccounts());
    if(req.url==='/api/accounts/refresh'){if(Object.keys(body).length)throw Error('Unexpected refresh option.');return send(200,await controller.accountState(true));}
    if(req.url==='/api/accounts/select')return send(200,await controller.selectAccount(body));
+   if(req.url==='/api/accounts/disable')return send(200,await controller.setAccountDisabled(body));
    if(req.url==='/api/gpu/open')return send(200,await controller.openGpu());
    if(req.url.startsWith('/api/gpu/')){
     if(!controller.settings.gpu.enabled)throw Error('GPU module is disabled.');

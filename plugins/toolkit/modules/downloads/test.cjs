@@ -1,6 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
-const {DownloadManager,Semaphore,safeName}=require('./engine.cjs');
+const {DownloadManager,Semaphore,safeName,chunkSize}=require('./engine.cjs');
 const {startServer}=require('./server.cjs');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('Orca filtered worker environment resolves CLI and Windows tools',async()=>{
@@ -39,6 +39,22 @@ test('parallel writes survive a dropped range and verify the original bytes',asy
   assert.equal(job.status,'complete');assert.ok(job.verified);assert.ok(f.fake.max>1&&f.fake.max<=4);assert.ok(job.retries>=1);
   assert.deepEqual(fs.readFileSync(job.destination),f.source);assert.equal(f.fake.cleaned,1);
  }finally{await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
+});
+test('small images use all requested streams and preserve their bytes',async()=>{
+ const f=fixture(4852825);
+ try{const j=await f.manager.create({source:'/remote/image.png',folder:f.folder,concurrency:12});const job=await settled(f.manager,j.id);
+  assert.equal(job.status,'complete');assert.equal(f.fake.max,12);assert.equal(f.fake.reads.length,12);assert.ok(job.chunk<4*1024*1024);assert.deepEqual(fs.readFileSync(job.destination),f.source);
+ }finally{await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
+ assert.equal(chunkSize(4096,12),256*1024);assert.equal(chunkSize(1024*1024*1024,16),4*1024*1024);
+});
+test('legacy saved ranges keep their original 4 MB offsets after resume',async()=>{
+ const f=fixture(4852825);let restored;
+ try{const id='a'.repeat(32),chunk=4*1024*1024,partial=path.join(f.root,'legacy.part'),destination=path.join(f.root,'legacy.png');
+  const bytes=Buffer.alloc(f.source.length);f.source.copy(bytes,chunk,chunk);fs.writeFileSync(partial,bytes);
+  const meta=await f.fake.prepare();fs.writeFileSync(path.join(f.options.dataDir,'jobs',id+'.json'),JSON.stringify({id,source:'/remote/legacy.png',name:'legacy.png',destination,partial,concurrency:12,chunk,size:meta.size,sha256:meta.sha256,fingerprint:meta.fingerprint,status:'paused',done:[1],retries:0}));
+  restored=new DownloadManager(f.options);await restored.action(id,'resume');const job=await settled(restored,id);
+  assert.equal(job.status,'complete');assert.equal(job.chunk,chunk);assert.deepEqual(f.fake.reads,[0]);assert.deepEqual(fs.readFileSync(destination),f.source);
+ }finally{await restored?.close();await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
 });
 test('pause, reopen and resume retain finished ranges',async()=>{
  const f=fixture(20*1024*1024);f.fake.delay=2;

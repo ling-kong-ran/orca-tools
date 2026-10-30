@@ -11,6 +11,8 @@
 
 此方式通过已有的 Orca 配对连接调用固定 accounts RPC，不需要远程 worktree、另开浏览器标签、额外 SSH 隧道或安装下面的旧面板。账号必须已在远程用户的 Orca 中登录；本机账号和远程账号是不同列表。首次加载显示已有用量缓存，Refresh usage 主动更新；缺失数据保持 Unknown。
 
+Toolkit 1.2.2 起，点击账号卡片的 **Disable account** 可禁用该账号的切换按钮；后端也会拒绝选择该账号。点击 **Enable account** 恢复。状态按远程环境和账号 ID 保存至本机 `%LOCALAPPDATA%/OrcaTools/account-preferences.json`，刷新页面、保存设置或重启插件均保留。禁用不会删除登录或中断现有会话，也不会阻止通过其他 Orca 入口切换。
+
 ## 可选旧面板：在 VPS 安装
 
 在拥有 Orca 远程运行时的普通用户终端中克隆本仓库，进入根目录；不要用 root 安装面板。

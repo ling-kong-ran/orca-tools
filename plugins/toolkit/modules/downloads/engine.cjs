@@ -34,6 +34,11 @@ function safeName(source) {
   if (!name || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = 'download_' + name;
   return name.slice(0, 180);
 }
+function chunkSize(size, concurrency) {
+  // Keep small transfers parallel without creating tiny SSH requests. Large
+  // transfers retain bounded ranges for retries and persisted resume offsets.
+  return Math.max(256*1024,Math.min(4*1024*1024,Math.ceil(size/concurrency)));
+}
 class DownloadManager {
   constructor(options) {
     this.options = options; this.root = options.dataDir; this.jobs = new Map(); this.runs = new Map();
@@ -91,6 +96,7 @@ class DownloadManager {
     if (!job.sha256) {
       job.status='preparing';this.save(job);
       const meta=await this.transport.prepare(job);job.size=meta.size;job.sha256=meta.sha256;job.fingerprint=meta.fingerprint;
+      job.chunk=chunkSize(job.size,job.concurrency);
       const handle=fs.openSync(job.partial,'wx');try{fs.ftruncateSync(handle,job.size);}finally{fs.closeSync(handle);}
       this.save(job);
     }
@@ -160,4 +166,4 @@ class DownloadManager {
   async pauseAll(){await Promise.all([...this.runs.keys()].map(id=>this.action(id,'pause')));}
   async close(){this.closed=true;await this.pauseAll();}
 }
-module.exports={DownloadManager,Semaphore,safeName};
+module.exports={DownloadManager,Semaphore,safeName,chunkSize};
