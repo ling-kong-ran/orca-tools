@@ -38,6 +38,9 @@ def utc_time(match):
 
 
 def remote_text(text, resources=False):
+    text = re.sub(r'(?i)\b[A-Z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+\b', '[email]', text)
+    text = re.sub(r'(?i)(https?://)[^/\s@]+@', r'\1[credentials]@', text)
+    text = re.sub(r'(?i)([?&](?:token|access_token|api_key|secret|signature|password)=)[^&\s"<>]+', r'\1[redacted]', text)
     text = ISO.sub(utc_time, text)
     text = LOCAL_ZONE.sub('[local timezone]', text)
     # Local paths never become URLs or download handles. Known Tripo paths are

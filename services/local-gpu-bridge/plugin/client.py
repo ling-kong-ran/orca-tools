@@ -48,7 +48,7 @@ NATIVE_COMMON = [
     tool('project_files','List approved project files, excluding secrets, executables, caches and Git metadata.',{'project_id':STR,'prefix':STR,'offset':{'type':'integer'},'limit':{'type':'integer'}},['project_id']),
     tool('read_project_file','Read one small project text file. Local addresses and absolute paths are redacted.',{'project_id':STR,'path':STR},['project_id','path']),
     tool('download_project_file','Download one approved local project file, such as a generated GLB, blend scene or screenshot, onto the VPS. Does not expose arbitrary local files.',{'project_id':STR,'path':STR,'destination_dir':STR},['project_id','path']),
-    tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, backing up local edits first. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
+    tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, discarding local tracked edits without backup. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
     tool('native_job_status','Check a native render task and its generated artifacts.',{'job_id':STR},['job_id']),
     tool('fetch_native_artifact','Download a registered native render artifact to an exclusive file on the VPS and verify SHA-256. Failed batches with result.partial_success=true retain successful artifacts; download these and retry only result.failed_screenshots.',{'job_id':STR,'index':{'type':'integer'},'destination_dir':STR},['job_id','index'],False)
 ]
@@ -58,8 +58,13 @@ GODOT_TOOLS = NATIVE_COMMON + [
          {'project_id':STR,'scene':STR,'width':{'type':'integer'},'height':{'type':'integer'},'wait_seconds':{'type':'number'},'user_args':{'type':'array','items':STR},'renderer':{'type':'string','enum':['forward_plus','mobile','gl_compatibility']},'request_id':STR},['project_id'],False)
 ]
 BLENDER_TOOLS = NATIVE_COMMON + [
-    tool('blender_operation','Control the dedicated local Blender instance using typed operations or Python. execute_code {code,parameters?} executes Python with bpy, project_root, parameters; only an execution receipt is returned; run_script {path,user_args?,parameters?} runs a synchronized project .py file. Script access must be enabled. No generic shell tool. Arguments: scene_info {} returns objects and capabilities.vrm_import/vrm_export; open/save {path relative to project, replace? for save}; import_asset {path, including .vrm with the installed VRM extension}; export_asset {path .glb, .obj or .vrm,replace?}; create_primitive {kind:cube|sphere|plane|cylinder|cone|torus|monkey,name?,location?,rotation?,scale?}; set_transform {name,location?,rotation?,scale?}; set_material {name,color:[r,g,b,a],roughness?,metallic?}; set_camera {location,target?,lens?}; delete_object {name}; render {engine:cycles|eevee,width?,height?,samples?}. Vectors have three numbers; rotations are radians. Returns a task id. Requires native network isolation.',
-         {'project_id':STR,'operation':{'type':'string','enum':['scene_info','open','save','import_asset','export_asset','create_primitive','set_transform','set_material','set_camera','delete_object','render','execute_code','run_script']},'arguments':{'type':'object'},'request_id':STR},['project_id','operation'],False)
+    tool('blender_operation','Control the dedicated local Blender instance using typed operations or Python. execute_code {code,parameters?} executes Python with bpy, project_root, parameters; returns filtered result JSON (set result=...), bounded messages and diagnostics; output_paths registers project-relative generated files as downloadable artifacts; run_script {path,user_args?,parameters?} runs a synchronized project .py file. Script access must be enabled. No generic shell tool. Arguments: scene_info {} returns objects and capabilities.vrm_import/vrm_export; open/save {path relative to project, replace? for save}; import_asset {path, including .vrm with the installed VRM extension}; export_asset {path .glb, .obj or .vrm,replace?}; create_primitive {kind:cube|sphere|plane|cylinder|cone|torus|monkey,name?,location?,rotation?,scale?}; set_transform {name,location?,rotation?,scale?}; set_material {name,color:[r,g,b,a],roughness?,metallic?}; set_camera {location,target?,lens?}; delete_object {name}; render {engine:cycles|eevee,width?,height?,samples?}. Vectors have three numbers; rotations are radians. viewport_capture {width?,height?} captures only the 3D viewport. batch {steps:[{operation,arguments}],continue_on_error?,timeout_seconds?} runs up to 32 sequential steps, preserves successful artifacts and reports progress. Nested batches are not supported. Returns a task id. Requires native network isolation.',
+         {'project_id':STR,'operation':{'type':'string','enum':['scene_info','open','save','import_asset','export_asset','create_primitive','set_transform','set_material','set_camera','delete_object','render','execute_code','run_script','viewport_capture','batch']},'arguments':{'type':'object'},'request_id':STR},['project_id','operation'],False)
+]
+
+BLENDER_TOOLS += [
+    tool('blender_tasks','List the latest Blender jobs, progress and filtered results. Optionally filter by project.',{'project_id':STR}),
+    tool('cancel_blender_task','Cancel a queued Blender task, or stop the managed Blender process for a running task. Running cancellation discards unsaved scene changes. Save first when possible. Does not stop Unity, Godot or VRoid.',{'job_id':STR},['job_id'],False)
 ]
 
 VROID_TOOLS = NATIVE_COMMON[:6] + [
@@ -206,6 +211,10 @@ class Client:
         if name=='tripo_download':return self.tripo_download(args)
         if name=='vroid_tools':return self.request('/v1/vroid/tools')
         if name=='vroid_operation':return vroid_state_result(self.request('/v1/vroid/call',args),args['operation'])
+        if name=='blender_tasks':return self.request('/v1/native/blender-tasks',args)
+        if name=='cancel_blender_task':
+            if not re.fullmatch('[a-f0-9]{32}',args['job_id']):raise ValueError('Invalid job id.')
+            return self.request('/v1/native/blender-cancel',{'ident':args['job_id']})
         if name=='local_projects':return self.request('/v1/native/projects')
         if name=='local_status':return self.request('/v1/native/status')
         if name=='project_files':return self.request('/v1/native/files',args)

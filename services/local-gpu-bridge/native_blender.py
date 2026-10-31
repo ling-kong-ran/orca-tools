@@ -1,8 +1,9 @@
 """Restricted Blender command worker. Loaded only in the managed Blender instance."""
-import bpy,json,pathlib,sys,math,os
+import bpy,json,pathlib,sys,math,os,contextlib,shutil
 from mathutils import Vector
 # Blender --python does not consistently add the worker directory to sys.path.
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
+from native_blender_output import Capture, result as safe_result, diagnostic
 from native_blender_vrm import capabilities as vrm_capabilities, operate as vrm_operate
 # Enabling extension preferences must not auto-save factory settings over the
 # user's regular Blender configuration.
@@ -21,15 +22,54 @@ def vec(value):
     return value
 def object_info(obj):return {'name':obj.name,'type':obj.type,'location':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)}
 def execute(command,args,job_id):
+    if command=='batch':
+        results=[];artifacts=[]
+        for index,step in enumerate(args['steps']):
+            progress={'completed':index,'total':len(args['steps']),'operation':step['operation']}
+            temp=spool/(job_id+'.progress.tmp');temp.write_text(json.dumps(progress),encoding='utf-8');temp.replace(spool/(job_id+'.progress.json'))
+            try:
+                value=execute(step['operation'],step.get('arguments',{}),job_id+'-'+str(index))
+                failed=value.get('executed') is False
+                results.append({'index':index,'operation':step['operation'],'status':'failed' if failed else 'succeeded','result':value})
+                artifacts.extend(value.get('artifacts',[]))
+                if value.get('artifact'):artifacts.append(value['artifact'])
+                if failed and not args.get('continue_on_error',False):break
+            except Exception as error:
+                results.append({'index':index,'operation':step['operation'],'status':'failed','diagnostic':diagnostic(error,root)})
+                if not args.get('continue_on_error',False):break
+        return {'steps':safe_result(results),'completed':len(results),'total':len(args['steps']),'partial_success':any(x['status']=='failed' for x in results),'artifacts':artifacts}
+    if command=='viewport_capture':
+        target=out/(job_id+'.png');scene=bpy.context.scene
+        previous=(scene.render.filepath,scene.render.resolution_x,scene.render.resolution_y,scene.render.resolution_percentage,scene.render.image_settings.file_format)
+        try:
+            scene.render.filepath=str(target);scene.render.resolution_x=args.get('width',1280);scene.render.resolution_y=args.get('height',720);scene.render.resolution_percentage=100;scene.render.image_settings.file_format='PNG'
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type!='VIEW_3D':continue
+                    region=next((r for r in area.regions if r.type=='WINDOW'),None)
+                    if region:
+                        with bpy.context.temp_override(window=window,area=area,region=region):bpy.ops.render.opengl(write_still=True,view_context=True)
+                        return {'artifact':target.name,'capture':'viewport'}
+            raise ValueError('No 3D viewport is available in the managed Blender instance.')
+        finally:
+            scene.render.filepath,scene.render.resolution_x,scene.render.resolution_y,scene.render.resolution_percentage,scene.render.image_settings.file_format=previous
     if command in ('execute_code','run_script'):
         code=args.get('code') if command=='execute_code' else local_file(args['path'],{'.py'}).read_text(encoding='utf-8-sig')
         namespace={'__name__':'__main__','__file__':str(root/args['path']) if command=='run_script' else '<remote-blender>', 'bpy':bpy,'project_root':root,'parameters':args.get('parameters',{})}
         previous=list(sys.argv);cwd=os.getcwd()
         try:
             os.chdir(root);sys.argv=[namespace['__file__'],*args.get('user_args',[])]
-            exec(compile(code,namespace['__file__'],'exec'),namespace,namespace)
-            value=json.loads(json.dumps(namespace.get('result'),default=str))
-            return {'executed':True,'result':value}
+            capture=Capture()
+            try:
+                with contextlib.redirect_stdout(capture),contextlib.redirect_stderr(capture):exec(compile(code,namespace['__file__'],'exec'),namespace,namespace)
+            except Exception as error:
+                return {'executed':False,'diagnostic':diagnostic(error,root),'messages':capture.text,'messages_truncated':capture.truncated}
+            artifacts=[]
+            for index,name in enumerate(args.get('output_paths',[])):
+                file=local_file(name,{'.png','.jpg','.jpeg','.webp','.glb','.gltf','.obj','.vrm','.blend','.mp4','.json','.wav','.fbx','.abc'})
+                if not file.is_file():raise ValueError('Declared output file is missing: '+name)
+                target=out/(job_id+'-output-'+str(index)+file.suffix.lower());shutil.copyfile(file,target);artifacts.append(target.name)
+            return {'executed':True,'result':safe_result(namespace.get('result')),'messages':capture.text,'messages_truncated':capture.truncated,'artifacts':artifacts}
         finally:sys.argv=previous;os.chdir(cwd)
     if command=='scene_info':return {'objects':[object_info(o) for o in list(bpy.context.scene.objects)[:500]],'object_count':len(bpy.context.scene.objects),'capabilities':vrm_capabilities()}
     if command=='open':
@@ -77,7 +117,12 @@ def execute(command,args,job_id):
     if command=='render':
         scene=bpy.context.scene;engine=args.get('engine','cycles')
         if engine=='cycles' and 'cycles' not in bpy.context.preferences.addons:bpy.ops.preferences.addon_enable(module='cycles')
-        scene.render.engine='CYCLES' if engine=='cycles' else 'BLENDER_EEVEE'
+        scene.render.engine='CYCLES' if engine=='cycles' else 'CYCLES'
+        if engine=='eevee':
+            for candidate in ('BLENDER_EEVEE_NEXT','BLENDER_EEVEE'):
+                try:scene.render.engine=candidate;break
+                except TypeError:continue
+            else:raise ValueError('Eevee is unavailable')
         if engine=='cycles':
             preferences=bpy.context.preferences.addons['cycles'].preferences;preferences.compute_device_type='OPTIX';preferences.get_devices()
             devices=[d for d in preferences.devices if d.type=='OPTIX']
@@ -111,9 +156,9 @@ def service():
         try:
             request=json.loads(claimed.read_text(encoding='utf-8'))
             result={'ok':True,'result':execute(request['command'],request.get('arguments',{}),job_id)}
-        except Exception:
+        except Exception as error:
             # Raw exceptions stay in the local app log, not in the remote response.
-            import traceback;traceback.print_exc();result={'ok':False,'error':'Blender operation failed. Check the local application log.'}
+            import traceback;traceback.print_exc();result={'ok':False,'error':'Blender operation failed.','diagnostic':diagnostic(error,root)}
         target=spool/(job_id+'.response.json');temp=target.with_suffix('.tmp');temp.write_text(json.dumps(result),encoding='utf-8');temp.replace(target)
     return 0.1
 

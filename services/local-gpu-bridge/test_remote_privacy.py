@@ -4,6 +4,10 @@ from remote_privacy import remote_json, remote_text
 
 
 class RemotePrivacyTests(unittest.TestCase):
+    def test_plain_text_email_and_url_credentials_are_filtered(self):
+        text=remote_text('Contact user+tag@example.com; https://alice:private-secret@localhost/file?access_token=private-token&ok=1')
+        for forbidden in ('user+tag@example.com','alice','private-secret','private-token'):self.assertNotIn(forbidden,text)
+        self.assertIn('ok=1',text)
     def test_nested_mcp_content_cannot_bypass_metadata_filter(self):
         private = {'region': 'cn', 'account_region': 'CN', 'locale': 'zh-CN',
                    'browser_locale': 'zh-CN', 'timezone': 'Asia/Shanghai',

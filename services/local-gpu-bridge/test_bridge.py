@@ -31,6 +31,18 @@ class Tests(unittest.TestCase):
         self.client=client_module.Client(self.client_config)
     def tearDown(self):self.server.shutdown();self.server.server_close();self.temp.cleanup()
     def submit(self):return self.client.call('run_workflow',{'workflow_id':'connection-test','parameters':{'color':123},'request_id':'b'*32})
+    def test_blender_task_tools_use_authenticated_routes_and_filter_results(self):
+        with unittest.mock.patch.object(self.bridge.native,'blender_tasks',return_value={'jobs':[{'message':'test@example.com 8.8.8.8'}]}) as listed:
+            value=self.client.call('blender_tasks',{'project_id':'test'})
+            listed.assert_called_once_with(project_id='test')
+            self.assertNotIn('test@example.com',json.dumps(value));self.assertNotIn('8.8.8.8',json.dumps(value))
+        with unittest.mock.patch.object(self.bridge.native,'cancel_blender',return_value={'status':'cancelled'}) as cancelled:
+            self.assertEqual(self.client.call('cancel_blender_task',{'job_id':'a'*32})['status'],'cancelled')
+            cancelled.assert_called_once_with(ident='a'*32)
+        with self.assertRaises(ValueError):self.client.call('cancel_blender_task',{'job_id':'../x'})
+        definition=next(t for t in client_module.BLENDER_TOOLS if t['name']=='blender_operation')
+        self.assertIn('batch',definition['inputSchema']['properties']['operation']['enum'])
+        self.assertIn('viewport_capture',definition['inputSchema']['properties']['operation']['enum'])
     def test_remote_boundary_filters_tripo_status_and_errors(self):
         with unittest.mock.patch.object(self.bridge.tripo, 'status', return_value={
             'connected': True, 'region': 'cn', 'timezone': 'Asia/Shanghai', 'public_ip': '198.51.100.9'}):

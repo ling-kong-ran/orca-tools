@@ -23,7 +23,7 @@ def start_admin(bridge, port=18773):
                 if self.command=='GET' and self.path=='/api/workflows':return self.send(200,{'workflows':bridge.catalog()})
                 if self.command=='GET' and self.path=='/api/native':
                     return self.send(200,{**bridge.native.status(local=True),'plans':[bridge.native.public_plan(p) for p in sorted(bridge.native.plans.values(),key=lambda p:p['created_at'],reverse=True)[:20]],'jobs':[bridge.native.public_job(j) for j in sorted(bridge.native.jobs.values(),key=lambda j:j['created_at'],reverse=True)[:30]]})
-                if self.command=='POST' and self.path in ('/api/native/project','/api/native/stop-blender','/api/native/setup','/api/native/git','/api/native/unity-start','/api/native/unity-stop'):
+                if self.command=='POST' and self.path in ('/api/native/project','/api/native/stop-blender','/api/native/setup','/api/native/git','/api/native/unity-start','/api/native/unity-stop','/api/native/blender-cancel'):
                     if self.headers.get('Origin')!='http://'+expected:return self.send(403,{'error':'Invalid origin'})
                     size=int(self.headers.get('Content-Length','0'))
                     if not 0<size<=65536:raise ValueError('Invalid request size.')
@@ -31,6 +31,7 @@ def start_admin(bridge, port=18773):
                     if self.path=='/api/native/project':return self.send(200,bridge.native.manage_project(body))
                     if self.path=='/api/native/stop-blender':return self.send(200,bridge.native.stop_blender())
                     if self.path=='/api/native/git':return self.send(200,bridge.native.project_git(**body))
+                    if self.path=='/api/native/blender-cancel':return self.send(200,bridge.native.cancel_blender(**body))
                     if self.path=='/api/native/unity-start':return self.send(200,bridge.native.unity.start(**body))
                     if self.path=='/api/native/unity-stop':return self.send(200,bridge.native.unity.stop(**body))
                     return self.send(200,bridge.native.setup_privacy())

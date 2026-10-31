@@ -108,7 +108,7 @@ python3 scripts/install-vps-gpu.py --client-config ~/gpu-client.local.json \
 1. 工作流：让 VPS Claude “检查 gpu_status，列出 list_workflows，运行一个现有工作流，查询 job_status 并取回产物”。支持的 ComfyUI 编辑器保存格式自动发现，不需要逐个手工导入；不支持的自定义控件可在本机转换为 API 格式后用 `manage.py import` 导入。
 2. Git：让 Claude 对 `project_id="game"` 调用 `project_git(operation="status")`，再 `project_git(operation="pull")`，查询 `native_job_status` 到成功。
 3. Godot：对真实存在的 scene 调用 `capture_scene`，可传场景 `user_args`；`run_project_script` 执行已同步的 `.gd`。
-4. Blender：调用 `blender_operation(operation="scene_info")`；专用实例首次操作启动。Python 用 `execute_code` / `run_script`，返回回执，不返回原始进程日志。
+4. Blender：调用 `blender_operation(operation="scene_info")`；专用实例首次操作启动。Python 用 `execute_code` / `run_script`；设置变量 `result` 返回过滤后的 JSON，`print` 输出经截断和过滤后返回，不暴露原始进程日志。
 5. VPS 修改**必须 commit + push**。下一次渲染前自动 fetch/reset 到配置的分支。本机受跟踪修改直接丢弃，阻碍远端写入的本机文件由 Git 覆盖，不创建 ZIP、patch 或备份引用。非冲突未跟踪渲染产物通常保留，不运行 git clean。
 
 没有开放通用 shell、任意 Git 参数、修改远端 URL、本机 commit/push。二进制项目素材需进入仓库或由预先配置的依赖流程准备；当前不会自动运行 Git LFS pull 或递归更新 submodule。
@@ -144,3 +144,19 @@ See [VRoid deployment and operations](vroid.md) for the optional managed Studio 
 ## Tripo Studio
 
 [Tripo Studio](tripo.md)：可选，用自己的 Studio 会员账号（`tripo.region` 选国内站 `cn` 或国际站 `global`）生成和处理 3D 模型。同样走这个桥和 Toolkit 入口，账号只在本机，首次用 `scripts/tripo-login.py` 登录。
+
+
+## Blender 任务与调试（1.9.0+）
+
+- `execute_code` / `run_script`：设置 Python 变量 `result` 返回业务 JSON；返回结果深度、数量和大小有限制（单个结果约 64 KB，消息约 8 KB），超限会明确标记。异常返回类型、消息和脚本行号；本机路径、邮箱、地址与已知硬件标识经过过滤，不返回完整本机 traceback。
+- `viewport_capture`：`{width:1280,height:720}`，捕获专用 Blender 的 3D 视口，生成 PNG；不拍桌面或其他软件窗口。修改视角可先通过 Python 调整 VIEW_3D 的 region_3d。
+- `batch`：`{steps:[{operation,arguments}],continue_on_error:false,timeout_seconds:1800}`。最多 32 步，按顺序执行；默认首个错误停止，开启 continue_on_error 后继续其余步骤。失败批次仍可通过 fetch_native_artifact 取回成功产物。步骤不会自动回滚，重试前检查已有修改。
+- `native_job_status` 查看进度和结果；`blender_tasks` 列出最近任务（可指定 project_id）；`cancel_blender_task` 取消指定任务。取消正在运行的任务会终止专用 Blender，未保存的场景修改会丢失；取消排队任务不影响当前运行任务。超时也会停止专用实例，防止旧任务继续执行。
+- 脚本参数 `output_paths` 可声明最多 32 个项目内输出文件，生成后注册为下载产物。支持模型、blend、图片、视频、音频和 JSON；JSON 产物限制 1 MB 并经过文本隐私过滤。动画、烘焙和批量导出可通过 Blender Python 实现，再声明产物。媒体和模型内容不做语义级隐私清洗，不应主动写入本机身份信息。
+- 任务列表在统一管理页显示步骤进度、过滤后的结果和取消按钮。批次中的 Python 步骤也必须开启对应项目的 allow_scripts。保存场景使用 save 或 bpy.ops.wm.save_as_mainfile；取消前先保存。
+
+执行示例：`blender_operation(project_id="okgame", operation="execute_code", arguments={"code":"result = {'objects': len(bpy.context.scene.objects)}"})`。返回任务 ID 后轮询 native_job_status；不要反复提交同一有副作用操作，重试时沿用 request_id。
+
+升级时同步服务目录中的 `native_blender.py`、`native_blender_output.py`、`native_control.py`、`remote_privacy.py`、`bridge.py`、`admin.py` 和 `admin.html`，保存并关闭受管理的编辑器、等待任务结束后重启 Bridge。VPS 同步 plugin 目录并更新 Claude 插件，运行 `/reload-plugins` 刷新新增工具和 operation 枚举。Orca Toolkit 1.3.0 的任务详情与取消入口需在 Orca 插件页刷新审核后加载。
+
+这仍是本机专用 Blender 的任务接口，不是任意 shell 或实时远程桌面。离线插件、单实例和项目文件范围等限制继续适用。运行脚本拥有本机用户权限，输出过滤无法防止恶意脚本主动编码、写入媒体等方式带出信息。

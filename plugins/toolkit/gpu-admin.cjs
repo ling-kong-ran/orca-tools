@@ -2,7 +2,7 @@
 const http=require('node:http');
 const {projectTypes}=require('./project-types.cjs');
 const GET=new Set(['/api/native','/api/workflows']);
-const POST=new Set(['/api/native/project','/api/native/stop-blender','/api/native/setup','/api/native/git','/api/native/unity-start','/api/native/unity-stop','/api/import']);
+const POST=new Set(['/api/native/project','/api/native/stop-blender','/api/native/setup','/api/native/git','/api/native/unity-start','/api/native/unity-stop','/api/native/blender-cancel','/api/import']);
 class GpuAdmin {
  constructor(){this.token=null;}
  exchange(route,body,token){return new Promise((resolve,reject)=>{

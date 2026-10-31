@@ -317,6 +317,8 @@ def make_handler(bridge):
                     if self.command=='POST' and route=='/v1/native/sync/chunk':return self.send_json(200,native.upload_chunk(self.body()))
                     if self.command=='POST' and route=='/v1/native/sync/apply':return self.send_json(200,native.apply_sync(self.body().get('plan_id')))
                     if self.command=='POST' and route=='/v1/native/jobs':return self.send_json(201,native.queue(self.body()))
+                    if self.command=='POST' and route=='/v1/native/blender-tasks':return self.send_json(200,native.blender_tasks(**self.body()))
+                    if self.command=='POST' and route=='/v1/native/blender-cancel':return self.send_json(200,native.cancel_blender(**self.body()))
                     if self.command=='GET' and route=='/v1/native/project-file':
                         query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                         file=native.project_download(query.get('project_id',[''])[0],query.get('path',[''])[0]);size=file.stat().st_size

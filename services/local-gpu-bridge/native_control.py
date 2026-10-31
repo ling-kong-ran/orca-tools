@@ -55,7 +55,8 @@ BLENDER_FIELDS={
  'create_primitive':{'kind','name','location','rotation','scale'},'set_transform':{'name','location','rotation','scale'},
  'set_material':{'name','color','roughness','metallic'},'set_camera':{'location','target','lens'},
  'delete_object':{'name'},'render':{'engine','width','height','samples'}
- ,'execute_code':{'code','parameters','timeout_seconds'},'run_script':{'path','user_args','parameters','timeout_seconds'}
+ ,'execute_code':{'code','parameters','timeout_seconds','output_paths'},'run_script':{'path','user_args','parameters','timeout_seconds','output_paths'},
+ 'viewport_capture':{'width','height'},'batch':{'steps','continue_on_error','timeout_seconds'}
 }
 
 from job_reuse import latest_attempt, attempt_fields
@@ -290,7 +291,9 @@ class NativeControl:
             state.update({f['path']:f['sha256'] for f in plan['files']});atomic(state_file,state)
             plan['status']='applied';atomic(self.root/'plans'/(ident+'.json'),plan)
             return self.public_plan(plan)
-    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','error_stage','artifacts','attempt','retry_of') if k in job})
+    def public_job(self,job):return private_result({k:copy.deepcopy(job[k]) for k in ('id','project_id','engine','operation','status','created_at','updated_at','result','error','error_stage','artifacts','attempt','retry_of','progress') if k in job})
+    def blender_scripts(self,operation,args):
+        return operation in ('execute_code','run_script') or (operation=='batch' and any(self.blender_scripts(s['operation'],s.get('arguments',{})) for s in args['steps']))
     def save_job(self,job):job['updated_at']=time.time();atomic(self.root/'jobs'/(job['id']+'.json'),job)
     def project_git(self,project_id,operation='status',request_id=None):
         project,root=self.project(project_id)
@@ -307,7 +310,7 @@ class NativeControl:
             if operation not in ('pull','fetch') or args or not project.get('git',{}).get('enabled'):raise ValueError('Git operation is unavailable for this project.')
         elif engine=='blender':
             self.validate_blender(operation,args,root,allow_missing=pulls_first)
-            if operation in ('execute_code','run_script') and not project.get('allow_scripts'):raise ValueError('Project script access is disabled on the local management page.')
+            if self.blender_scripts(operation,args) and not project.get('allow_scripts'):raise ValueError('Project script access is disabled on the local management page.')
         elif operation=='script':
             from native_script import script_request
             script_request(self,project,root,operation,args,allow_missing=pulls_first)
@@ -343,6 +346,17 @@ class NativeControl:
     def validate_blender(self,operation,args,root,allow_missing=False):
         fields=BLENDER_FIELDS.get(operation)
         if fields is None or set(args)-fields:raise ValueError('Blender operation or argument is not exposed.')
+        if operation=='batch':
+            steps=args.get('steps')
+            if not isinstance(steps,list) or not 1<=len(steps)<=32:raise ValueError('Provide 1 to 32 batch steps.')
+            if 'continue_on_error' in args and type(args['continue_on_error'])is not bool:raise ValueError('continue_on_error must be boolean.')
+            for step in steps:
+                if not isinstance(step,dict) or set(step)-{'operation','arguments'} or step.get('operation')=='batch' or not isinstance(step.get('arguments',{}),dict):raise ValueError('Invalid batch step; nested batches are not supported.')
+                self.validate_blender(step.get('operation'),step.get('arguments',{}),root,allow_missing)
+        if 'output_paths' in args:
+            paths=args['output_paths']
+            if not isinstance(paths,list) or len(paths)>32:raise ValueError('Provide at most 32 output paths.')
+            for name in paths:inside(root,name)
         required={'open':{'path'},'save':{'path'},'import_asset':{'path'},'export_asset':{'path'},'create_primitive':{'kind'},'set_transform':{'name'},'set_material':{'name','color'},'set_camera':{'location'},'delete_object':{'name'},'execute_code':{'code'},'run_script':{'path'}}.get(operation,set())
         if not required.issubset(args):raise ValueError('Required Blender fields are missing.')
         if 'path' in args:inside(root,args['path'])
@@ -366,11 +380,14 @@ class NativeControl:
         if 'replace' in args and type(args['replace'])is not bool:raise ValueError('replace must be boolean.')
     def run(self,job):
         with self.execute_lock:
+            if job['status']=='cancelled':return
             stage='operation'
             try:
                 project,root=self.project(job['project_id'])
                 if job['engine']!='git':self.guard.require(job['engine'])
-                with self.lock:job['status']='running';self.save_job(job)
+                with self.lock:
+                    if job['status']=='cancelled':return
+                    job['status']='running';self.save_job(job)
                 output_dir=self.root/'artifacts';output_dir.mkdir(exist_ok=True)
                 git_update=None
                 if job['engine']=='git':
@@ -380,12 +397,12 @@ class NativeControl:
                     job['result']=git.pull(job['id']) if job['operation']=='pull' else {'fetched':True,'head':git.fetch()}
                     with self.lock:job['status']='succeeded';self.save_job(job)
                     return
-                if project.get('git',{}).get('enabled') and project['git'].get('auto_pull_before_render') and (job['engine']=='godot' or job['operation'] in ('open','execute_code','run_script','render')):
+                if project.get('git',{}).get('enabled') and project['git'].get('auto_pull_before_render') and (job['engine']=='godot' or job['operation'] in ('open','execute_code','run_script','render','batch')):
                     stage='git_sync'
                     from native_git import git_for
                     git_update=git_for(self,project,root).pull(job['id'])
                     stage='operation'
-                if job['engine']=='blender' and job['operation'] in ('run_script','execute_code') and not project.get('allow_scripts'):raise ValueError('Project script access is disabled.')
+                if job['engine']=='blender' and self.blender_scripts(job['operation'],job['arguments']) and not project.get('allow_scripts'):raise ValueError('Project script access is disabled.')
                 if job['engine']=='godot' and job['operation']=='script':
                     from native_script import run_script
                     self.import_godot(job,project,root)
@@ -402,10 +419,17 @@ class NativeControl:
                     self.validate_blender(job['operation'],job['arguments'],root)
                     self.run_blender(job,root,output_dir)
                 if git_update is not None:job.setdefault('result',{})['git_update']=git_update
-                with self.lock:job['status']='succeeded';self.save_job(job)
-            except Exception:
+                with self.lock:
+                    if job['status']!='cancelled':job['status']='failed' if job['engine']=='blender' and (job.get('result',{}).get('executed') is False or job.get('result',{}).get('partial_success')) else 'succeeded'
+                    if job['status']=='failed':job['error']='Blender reported an operation failure. See result for filtered diagnostics.';job['error_stage']='operation'
+                    self.save_job(job)
+            except Exception as error:
                 import logging;logging.exception('Native task failed')
                 with self.lock:
+                    if job['status']=='cancelled':return
+                    if job['engine']=='blender' and stage=='operation':
+                        from native_blender_output import diagnostic
+                        job.setdefault('result',{})['diagnostic']=private_result(diagnostic(error,root))
                     job['status']='failed'
                     job['error']='Project Git synchronization failed before the native operation started. Check the local Git connection and proxy, then retry.' if stage=='git_sync' else 'Native operation failed. Check the local management page and application log.'
                     job['error_stage']=stage
@@ -435,6 +459,8 @@ class NativeControl:
         finally:process.close()
         job['artifacts']=[{'index':0,'filename':'godot-capture.png','file':output.name}];job['result']={'captured':True,'hardware_render':True}
     def run_blender(self,job,root,output_dir):
+        if job['status']=='cancelled':return
+        job['_blender_started']=True
         spool=self.root/'blender-spool';spool.mkdir(exist_ok=True)
         if self.blender and (self.blender.poll() is not None or self.blender_project!=job['project_id']):
             if self.blender_project!=job['project_id'] and self.blender.poll() is None:raise ValueError('Stop the managed Blender instance before switching projects.')
@@ -448,24 +474,55 @@ class NativeControl:
             self.blender=self.process_factory(command,root,self.root/'blender.log',{'BLENDER_SYSTEM_SCRIPTS':str(pathlib.Path(self.config['native']['blender_executable']).parent/'5.2/scripts')})
             self.blender_project=job['project_id']
             for _ in range(300):
+                if job['status']=='cancelled':self.blender.stop();return
                 if ready.exists():break
                 if self.blender.poll() is not None:raise ValueError('Managed Blender stopped')
                 time.sleep(0.1)
-            else:raise ValueError('Managed Blender startup timeout')
+            else:
+                self.blender.stop()
+                raise ValueError('Managed Blender startup timeout')
         atomic(spool/(job['id']+'.request.json'),{'command':job['operation'],'arguments':job['arguments']})
         response=spool/(job['id']+'.response.json')
-        for _ in range(10*job['arguments'].get('timeout_seconds',1800 if job['operation'] in ('execute_code','run_script') else 240)):
+        for _ in range(10*job['arguments'].get('timeout_seconds',1800 if job['operation'] in ('execute_code','run_script','batch') else 240)):
+            if job['status']=='cancelled':return
             if response.exists():break
             if self.blender.poll() is not None:raise ValueError('Managed Blender stopped')
+            progress=spool/(job['id']+'.progress.json')
+            if progress.exists() and progress.stat().st_size<=16384:
+                try:job['progress']=private_result(json.loads(progress.read_text(encoding='utf-8')))
+                except (ValueError,OSError):pass
             time.sleep(0.1)
-        else:raise ValueError('Managed Blender operation timeout')
+        else:
+            self.blender.stop()
+            raise ValueError('Managed Blender operation timeout')
         data=json.loads(response.read_text(encoding='utf-8'))
-        if not data.get('ok'):raise ValueError('Blender operation failed')
-        job['result']={'executed':True} if job['operation'] in ('execute_code','run_script') else private_result(data['result'])
-        if job['operation']=='render':
-            file=output_dir/(job['id']+'.png')
-            if not file.is_file():raise ValueError('Rendered artifact missing')
-            job['artifacts']=[{'index':0,'filename':'blender-render.png','file':file.name}]
+        from remote_privacy import remote_json
+        job['result']=private_result(remote_json(data['result'] if data.get('ok') else {'executed':False,'diagnostic':data.get('diagnostic',{})}))
+        names=job['result'].pop('artifacts',[])
+        if job['result'].get('artifact'):names.append(job['result'].pop('artifact'))
+        for name in names:
+            if not isinstance(name,str) or not re.fullmatch(job['id']+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|json|wav|fbx|abc)',name):raise ValueError('Invalid Blender artifact.')
+            file=output_dir/name
+            if not file.is_file() or file.is_symlink():raise ValueError('Rendered artifact missing')
+            if file.suffix=='.json':
+                if file.stat().st_size>1024*1024:raise ValueError('JSON artifact exceeds 1 MB; split it into smaller files.')
+                atomic(file,private_result(remote_json(json.loads(file.read_text(encoding='utf-8')))))
+            job['artifacts'].append({'index':len(job['artifacts']),'filename':'blender-'+str(len(job['artifacts']))+file.suffix,'file':name})
+        if job['operation']=='batch':job['progress']={'completed':job['result'].get('completed',0),'total':job['result'].get('total',0)}
+    def blender_tasks(self,project_id=None):
+        if project_id:self.project(project_id)
+        allowed={p['id'] for p in self.config.get('native',{}).get('projects',[]) if p.get('enabled')}
+        with self.lock:return {'jobs':[self.public_job(j) for j in sorted(self.jobs.values(),key=lambda j:j['created_at'],reverse=True) if j['engine']=='blender' and j['project_id'] in allowed and (project_id is None or j['project_id']==project_id)][:100]}
+    def cancel_blender(self,ident):
+        with self.lock:
+            job=self.jobs.get(ident)
+            if not job or job['engine']!='blender':raise ValueError('Unknown Blender task.')
+            self.project(job['project_id'])
+            if job['status'] in ('queued','running'):
+                job['status']='cancelled'
+                if job.get('_blender_started') and self.blender:self.blender.stop()
+                self.save_job(job)
+            return self.public_job(job)
     def job_status(self,ident):
         with self.lock:
             if ident not in self.jobs:raise ValueError('Unknown native task.')
@@ -478,7 +535,7 @@ class NativeControl:
             if not ready or type(index)is not int or not 0<=index<len(job['artifacts']):raise ValueError('Artifact is not available.')
             self.project(job['project_id'])
             file=self.root/'artifacts'/job['artifacts'][index]['file']
-            if not re.fullmatch(ident+r'(?:-\d+)?\.(png|jpg|jpeg|webp|glb|blend)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')
+            if not re.fullmatch(ident+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|json|wav|fbx|abc)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')
             return file
     def stop_blender(self):
         with self.lock:

@@ -1,4 +1,4 @@
-# Orca Toolkit 1.2.3
+# Orca Toolkit 1.3.0
 
 一个 Orca 插件统一管理 Accounts、Downloads 和 GPU。**Ctrl+Alt+T** 打开工具集；Ctrl+Alt+D 下载；Ctrl+Alt+G GPU。
 
