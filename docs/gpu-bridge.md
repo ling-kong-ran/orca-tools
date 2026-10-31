@@ -160,3 +160,10 @@ See [VRoid deployment and operations](vroid.md) for the optional managed Studio 
 升级时同步服务目录中的 `native_blender.py`、`native_blender_output.py`、`native_control.py`、`remote_privacy.py`、`bridge.py`、`admin.py` 和 `admin.html`，保存并关闭受管理的编辑器、等待任务结束后重启 Bridge。VPS 同步 plugin 目录并更新 Claude 插件，运行 `/reload-plugins` 刷新新增工具和 operation 枚举。Orca Toolkit 1.3.0 的任务详情与取消入口需在 Orca 插件页刷新审核后加载。
 
 这仍是本机专用 Blender 的任务接口，不是任意 shell 或实时远程桌面。离线插件、单实例和项目文件范围等限制继续适用。运行脚本拥有本机用户权限，输出过滤无法防止恶意脚本主动编码、写入媒体等方式带出信息。
+
+
+### 等待通知刷屏（客户端 1.9.1）
+
+Claude 若反复创建 Bash 后台 `sleep` 等待命令，这些命令并不查询渲染进度；之后清理它们会产生退出码 143（被 SIGTERM 终止）的通知。不能据此判断 Blender 失败，应查看 native_job_status 和实际产物。
+
+使用 `wait_native_job(job_id, max_wait_seconds=15)`，单次最多 25 秒，期间只查询同一个任务；到期仍未完成时返回 waiting=true 和最后状态，不创建后台进程、不终止或重提渲染。按返回提示继续调用同一个 job_id。已有后台等待的历史通知不会被该工具删除。本次客户端更新兼容现有 `/v1/native/jobs/{id}` 接口，不需要重启本机 Bridge；VPS Claude 重新加载插件或新开会话后可发现新工具。

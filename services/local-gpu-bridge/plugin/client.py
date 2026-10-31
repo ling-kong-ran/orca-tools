@@ -1,5 +1,5 @@
 """MCP stdio client, runs on the VPS. Never logs the bridge credential."""
-import argparse, base64, hashlib, ipaddress, json, os, pathlib, re, socket, sys, urllib.error, urllib.parse, urllib.request, uuid, concurrent.futures
+import argparse, base64, hashlib, ipaddress, json, os, pathlib, re, socket, sys, time, urllib.error, urllib.parse, urllib.request, uuid, concurrent.futures
 from datetime import datetime
 
 
@@ -49,7 +49,8 @@ NATIVE_COMMON = [
     tool('read_project_file','Read one small project text file. Local addresses and absolute paths are redacted.',{'project_id':STR,'path':STR},['project_id','path']),
     tool('download_project_file','Download one approved local project file, such as a generated GLB, blend scene or screenshot, onto the VPS. Does not expose arbitrary local files.',{'project_id':STR,'path':STR,'destination_dir':STR},['project_id','path']),
     tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, discarding local tracked edits without backup. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
-    tool('native_job_status','Check a native render task and its generated artifacts.',{'job_id':STR},['job_id']),
+    tool('native_job_status','Check a native render task once and list artifacts. To wait, use wait_native_job with the same job_id; do not create background sleep timers.',{'job_id':STR},['job_id']),
+    tool('wait_native_job','Wait for an existing native task for up to 25 seconds (default 15), then return its latest status. If waiting=true, call this tool again with the SAME job_id. Never create Bash sleep commands, background wait timers or duplicate submissions to wait for rendering. This tool does not stop or restart any render.',{'job_id':STR,'max_wait_seconds':{'type':'integer','minimum':1,'maximum':25}},['job_id']),
     tool('fetch_native_artifact','Download a registered native render artifact to an exclusive file on the VPS and verify SHA-256. Failed batches with result.partial_success=true retain successful artifacts; download these and retry only result.failed_screenshots.',{'job_id':STR,'index':{'type':'integer'},'destination_dir':STR},['job_id','index'],False)
 ]
 GODOT_TOOLS = NATIVE_COMMON + [
@@ -154,12 +155,12 @@ class Client:
         else:
             raise ValueError('Privacy prerequisite is not satisfied: this VPS account can query public Tailscale endpoints. Run the supplied root privacy setup before enabling GPU access.')
         finally: probe.close()
-    def request(self, route, body=None, stream=False):
+    def request(self, route, body=None, stream=False, timeout=None):
         self.privacy_check()
         request = urllib.request.Request(self.base+route, data=None if body is None else json.dumps(body).encode(),
             headers={'Authorization': 'Bearer '+self.token, 'Content-Type': 'application/json'})
         try:
-            response = self.opener.open(request, timeout=620 if route.startswith('/v1/tripo/') else 300 if route=='/v1/vroid/call' else 90 if stream or body is not None else 20)
+            response = self.opener.open(request, timeout=timeout if timeout is not None else 620 if route.startswith('/v1/tripo/') else 300 if route=='/v1/vroid/call' else 90 if stream or body is not None else 20)
             if stream: return response
             with response: return json.load(response)
         except urllib.error.HTTPError as error:
@@ -175,6 +176,21 @@ class Client:
         try: listed = self.request('/v1/tripo/tools').get('tools', [])
         except ValueError: listed = []
         return TRIPO_FILE_TOOLS + [t for t in listed if isinstance(t, dict) and str(t.get('name', '')).startswith('tripo_') and t['name'] not in TRIPO_FILE_NAMES]
+    def wait_native_job(self,args):
+        ident=args.get('job_id');seconds=args.get('max_wait_seconds',15)
+        if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident):raise ValueError('Invalid job id.')
+        if type(seconds)is not int or not 1<=seconds<=25 or set(args)-{'job_id','max_wait_seconds'}:raise ValueError('max_wait_seconds must be 1 to 25.')
+        start=time.monotonic();deadline=start+seconds;value=None
+        while time.monotonic()<deadline:
+            try:value=self.request('/v1/native/jobs/'+ident,timeout=max(.05,min(20,deadline-time.monotonic())))
+            except ValueError:
+                if value is not None and time.monotonic()>=deadline:break
+                raise
+            if value.get('status') not in ('queued','running'):break
+            remaining=deadline-time.monotonic()
+            if remaining>0:time.sleep(min(3,remaining))
+        waiting=value is not None and value.get('status') in ('queued','running')
+        return {'job':value,'waiting':waiting,'waited_seconds':round(time.monotonic()-start,1),'next_action':('Call wait_native_job again with this same job_id. Do not start background sleep timers or resubmit the render.' if waiting else 'Inspect the job status, result and artifacts. No background wait timer is needed.')}
     def tripo_upload(self, args):
         file = pathlib.Path(args['path'])
         if not file.is_absolute() or not file.is_file() or file.stat().st_size > 40*1024**2: raise ValueError('Upload an absolute existing file of at most 40 MB.')
@@ -228,6 +244,7 @@ class Client:
         if name=='native_job_status':
             if not re.fullmatch('[a-f0-9]{32}',args['job_id']):raise ValueError('Invalid job id.')
             return self.request('/v1/native/jobs/'+args['job_id'])
+        if name=='wait_native_job':return self.wait_native_job(args)
         if name in ('capture_scene','run_project_script','blender_operation'):
             body={'project_id':args['project_id'],'engine':'blender' if name=='blender_operation' else 'godot','operation':('capture' if name=='capture_scene' else 'script') if name!='blender_operation' else args['operation'],
                   'arguments':{k:v for k,v in args.items() if k in ('scene','width','height','wait_seconds','renderer','user_args')} if name=='capture_scene' else {k:v for k,v in args.items() if k in ('script','user_args','timeout_seconds','output_paths','project_subdir','headless')} if name=='run_project_script' else args.get('arguments',{}),'request_id':args.get('request_id') or uuid.uuid4().hex}
