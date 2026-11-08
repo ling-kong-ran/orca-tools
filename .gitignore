@@ -19,4 +19,8 @@ keys/
 jobs/
 artifacts/
 git-backups/
+.build/deploy/
+dist/orca-deploy*/
+plugins/toolkit/modules/deploy-runtime/dependencies/
+services/deploy/dependencies/
 .DS_Store

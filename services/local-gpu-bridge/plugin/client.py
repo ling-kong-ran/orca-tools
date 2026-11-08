@@ -1,6 +1,36 @@
 """MCP stdio client, runs on the VPS. Never logs the bridge credential."""
 import argparse, base64, hashlib, ipaddress, json, os, pathlib, re, socket, sys, time, urllib.error, urllib.parse, urllib.request, uuid, concurrent.futures
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+
+def receiver_filename(name):
+    """Local wall-clock names use the sender's +08:00, then the VPS timezone.
+
+    Only complete calendar date + time tokens are interpreted. Date-only asset
+    names, version numbers, UUIDs and the remote handle used for fetching stay
+    unchanged. File bytes and commit objects are never rewritten here.
+    """
+    def convert(match):
+        parts=match.groupdict()
+        compact=parts.get('compact') is not None
+        stamp=parts['compact'] if compact else parts['date'].replace('-','')
+        clock=parts['clock'] if compact else parts['hour']+parts['minute']+parts['second']
+        try:
+            value=datetime.strptime(stamp+clock,'%Y%m%d%H%M%S')
+            zone=parts.get('zone')
+            offset=timezone(timedelta(hours=8))
+            if zone:
+                offset=timezone.utc if zone=='Z' else timezone(timedelta(
+                    minutes=(1 if zone[0]=='+' else -1)*(int(zone[1:3])*60+int(zone[-2:]))))
+            value=value.replace(tzinfo=offset).astimezone()
+        except ValueError:return match[0]
+        if compact:return value.strftime('%Y%m%d')+parts['join']+value.strftime('%H%M%S')+(value.strftime('%z') if value.utcoffset() else 'Z')
+        result=value.strftime('%Y-%m-%d')+parts['join']+value.strftime('%H')+parts['sep1']+value.strftime('%M')+parts['sep2']+value.strftime('%S')
+        result+=(parts.get('fraction') or '')+(value.strftime('%z') if value.utcoffset() else 'Z')
+        return result
+    compact=r'(?<![A-Za-z0-9])(?P<compact>\d{8})(?P<join>[-_T])(?P<clock>\d{6})(?P<zone>Z|[+-]\d{2}:?\d{2})?(?!\d)'
+    calendar=r'(?<!\d)(?P<date>\d{4}-\d{2}-\d{2})(?P<join>[T_ -])(?P<hour>\d{2})(?P<sep1>[-:.])(?P<minute>\d{2})(?P<sep2>[-:.])(?P<second>\d{2})(?P<fraction>\.\d+)?(?P<zone>Z|[+-]\d{2}:?\d{2})?(?!\d)'
+    return re.sub(calendar,convert,re.sub(compact,convert,name))
 
 
 def download_receipt(target, size, checksum):
@@ -202,7 +232,7 @@ class Client:
         folder = pathlib.Path(args['destination_dir'])
         if not folder.is_absolute(): raise ValueError('destination_dir must be absolute.')
         folder.mkdir(parents=True, exist_ok=True)
-        name = re.sub(r'[^A-Za-z0-9._-]', '_', pathlib.PurePosixPath(handle.split('/', 1)[1]).name).lstrip('.')[:150] or 'tripo.bin'
+        name = re.sub(r'[^A-Za-z0-9._+-]', '_', receiver_filename(pathlib.PurePosixPath(handle.split('/', 1)[1]).name)).lstrip('.')[:150] or 'tripo.bin'
         partial = folder/('.'+uuid.uuid4().hex+'.part'); digest = hashlib.sha256(); size = 0
         try:
             with self.request('/v1/tripo/file?'+urllib.parse.urlencode({'path': handle}), stream=True) as response, partial.open('xb') as output:
@@ -278,7 +308,7 @@ class Client:
             folder = pathlib.Path(args.get('destination_dir') or str(pathlib.Path.cwd()/'local-gpu-outputs'))
             if not folder.is_absolute(): raise ValueError('destination_dir must be absolute.')
             folder.mkdir(parents=True, exist_ok=True)
-            safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', artifact['filename'])[:150].lstrip('.') or 'output.bin'
+            safe_name = re.sub(r'[^A-Za-z0-9._+-]', '_', receiver_filename(artifact['filename']))[:150].lstrip('.') or 'output.bin'
             target = folder/(ident[:8]+'-'+str(index)+'-'+safe_name)
             partial = folder/('.'+uuid.uuid4().hex+'.part'); digest = hashlib.sha256(); size = 0
             try:
@@ -309,7 +339,7 @@ class Client:
         folder=pathlib.Path(args.get('destination_dir') or str(pathlib.Path.cwd()/'local-project-files'))
         if not folder.is_absolute():raise ValueError('destination_dir must be absolute.')
         folder.mkdir(parents=True,exist_ok=True)
-        name=re.sub('[^A-Za-z0-9._-]','_',pathlib.PurePosixPath(relative).name).lstrip('.')[:150] or 'file.bin'
+        name=re.sub('[^A-Za-z0-9._+-]','_',receiver_filename(pathlib.PurePosixPath(relative).name)).lstrip('.')[:150] or 'file.bin'
         partial=folder/('.'+uuid.uuid4().hex+'.part');digest=hashlib.sha256();size=0
         route='/v1/native/project-file?'+urllib.parse.urlencode({'project_id':args['project_id'],'path':relative})
         try:
@@ -353,7 +383,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.8.1'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.9.2'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}

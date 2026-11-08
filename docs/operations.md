@@ -140,6 +140,12 @@ Git、Godot、Blender 和 ComfyUI 提交任务时均可复用原来的32位 requ
 
 ## 文件回传与时间
 
+MCP 1.9.2 统一覆盖 ComfyUI、Godot/Blender/Unity 原生产物、项目文件（包括 VRoid 导出）和 Tripo 下载。落盘时使用接收 VPS 的系统时钟；文件名中的完整日期+时间从本机 +08:00（或名字里显式给出的偏移）转换到 VPS 时区，处理跨日并保留 Z/偏移标记。只带日期的版本号和资产名不改。源路径仍用于取回文件，以回执的最终 path 为准。
+
+当前部署 VPS 经核实使用 UTC。本机插件内的 Git 命令以 UTC 运行，状态不返回提交作者、邮箱或日期。本仓库的本机 Git 操作应通过 `python scripts/git-vps-time.py -C <仓库> <Git 参数>` 执行；新提交使用 UTC，amend/显式指定日期会保留同一时刻并转换偏移，不更改 Windows 时区。已有历史的 author/committer 偏移不会因为 fetch/pull 改变；普通 Git 绕过启动器也不会获得该保证。Git 本身不传源文件系统的 mtime。
+
+这一策略处理传输层时间，不隐式重写 ZIP/EXIF/视频/项目文件内部的时间字段，也不批量重命名受 Git 跟踪的资源或改写远端历史；这些需要格式相关处理或单独的迁移。现有 Claude MCP 进程需 `/reload-plugins` 或新会话加载新版客户端。本机 Git 模块已部署文件，遵守不重启 Bridge 的要求，运行中进程在下次启动后加载。
+
 ComfyUI 的 Windows 输出子目录会转为标准相对路径；保留绝对路径和目录越界拒绝规则。历史成功但产物列表为空的任务，可通过 job_status 从现有 ComfyUI history 恢复，不重新生成。
 
 MCP 1.4.1 的 fetch_artifact、fetch_native_artifact、download_project_file 都在传输完成后按接收 VPS 的系统时钟设置访问/修改时间，并在回执返回带时区偏移的 saved_at、timezone、timestamp_source=receiver。不沿用 Windows 发送端时间，也不手工平移 Unix 时间戳。显示时区仍由文件浏览器决定。升级本机桥接即可恢复产物识别；下载回执与时间策略位于 VPS 客户端，更新已安装插件后在现有 Claude 会话执行 /reload-plugins，或新建会话。

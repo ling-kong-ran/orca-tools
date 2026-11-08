@@ -14,9 +14,11 @@ class ProjectGit:
         self.run(['check-ref-format','refs/heads/'+self.branch])
     def run(self,args,timeout=30):
         env={k:v for k,v in os.environ.items() if not k.upper().startswith('GIT_') and not any(t in k.upper() for t in ('TOKEN','SECRET','CREDENTIAL','PASSWORD','ORCA_','CLAUDE_'))}
-        env.update(GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='Never',GIT_OPTIONAL_LOCKS='0',SSH_ASKPASS_REQUIRE='never',GIT_PAGER='cat')
+        # The VPS uses UTC. Never inherit the Windows wall-clock zone for Git
+        # diagnostics or future commands. This does not rewrite commit objects.
+        env.update(TZ='UTC0',GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='Never',GIT_OPTIONAL_LOCKS='0',SSH_ASKPASS_REQUIRE='never',GIT_PAGER='cat')
         nohooks=self.control.root/'git-no-hooks';nohooks.mkdir(exist_ok=True)
-        command=[self.exe,'-c','core.hooksPath='+str(nohooks),'-c','core.fsmonitor=false','-c','core.longpaths=true','-c','submodule.recurse=false','-C',str(self.root),*args]
+        command=[self.exe,'-c','core.hooksPath='+str(nohooks),'-c','log.date=iso-strict-local','-c','core.fsmonitor=false','-c','core.longpaths=true','-c','submodule.recurse=false','-C',str(self.root),*args]
         for attempt in range(4):
             result=subprocess.run(command,env=env,stdin=subprocess.DEVNULL,capture_output=True,timeout=timeout,creationflags=0x08000000 if os.name=='nt' else 0)
             transient=args[0]=='reset' and result.returncode and any(s in result.stderr.lower() for s in (b'unable to unlink',b'being used by another process',b'invalid argument'))

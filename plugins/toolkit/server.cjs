@@ -4,11 +4,13 @@ const {Controller}=require('./controller.cjs'),{launch}=require('./modules/downl
 const {DirectoryPicker}=require('./directory-picker.cjs'),preferences=require('./download-preferences.cjs');
 const {RemoteBrowser,validRemote}=require('./remote-browser.cjs');
 const {GpuAdmin}=require('./gpu-admin.cjs'),{compose}=require('./compose-ui.cjs');
+const {DeployControl}=require('./deploy-control.cjs');
 async function startServer(options){
  const controller=new Controller(options);await controller.initialize();const token=crypto.randomBytes(32).toString('hex');let port;
  const picker=options.directoryPicker||new DirectoryPicker(options.runtime);
  const remoteBrowser=options.remoteBrowser||new RemoteBrowser(options.runtime);
  const gpuAdmin=options.gpuAdmin||new GpuAdmin();
+ const deployment=options.deployment||new DeployControl(options.runtime,options.dataDir);
  const server=http.createServer(async(req,res)=>{
   const origin='http://127.0.0.1:'+port;
   const send=(code,body,type='application/json; charset=utf-8')=>{const bytes=Buffer.from(typeof body==='string'?body:JSON.stringify(body));res.writeHead(code,{'Content-Type':type,'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':`default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${token}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});res.end(bytes);};
@@ -22,6 +24,7 @@ async function startServer(options){
    if(req.headers['x-toolkit-token']!==token&&req.headers['x-download-token']!==token)return send(403,{error:'Session changed. Reload this page.'});
    if(req.method==='GET'&&req.url==='/api/accounts')return send(200,await controller.accountState());
    if(req.method==='GET'&&req.url==='/api/status')return send(200,await controller.status());
+   if(req.method==='GET'&&req.url==='/api/deploy/state')return send(200,await deployment.request(req.url));
    if(req.method==='GET'&&['/api/gpu/native','/api/gpu/workflows'].includes(req.url)){
     if(!controller.settings.gpu.enabled)throw Error('GPU module is disabled.');
     return send(200,await gpuAdmin.request(req.url.replace('/api/gpu/','/api/')));
@@ -32,6 +35,7 @@ async function startServer(options){
    if(req.headers['content-type']?.split(';')[0]!=='application/json')return send(415,{error:'Expected JSON.'});
    let size=0;const limit=req.url==='/api/gpu/import'?4*1024*1024:16384;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit)throw Error('Request too large.');chunks.push(chunk);}
    const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Expected an object.');
+   if(req.url.startsWith('/api/deploy/')||req.url.startsWith('/api/deploy-local/'))return send(200,await deployment.request(req.url,body));
    if(req.url==='/api/settings')return send(200,await controller.update(body));
    if(req.url==='/api/accounts/open')return send(200,await controller.openAccounts());
    if(req.url==='/api/accounts/refresh'){if(Object.keys(body).length)throw Error('Unexpected refresh option.');return send(200,await controller.accountState(true));}
@@ -79,6 +83,6 @@ async function startServer(options){
   }catch(e){if(!res.headersSent)send(400,{error:String(e.message).slice(0,500)});else res.destroy();}
  });
  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(options.port??18774,'127.0.0.1',resolve);});}catch(e){await controller.close();throw e;}
- port=server.address().port;return {url:`http://127.0.0.1:${port}/`,controller,async close(){picker.close?.();await controller.close();await new Promise(resolve=>server.close(resolve));}};
+ port=server.address().port;return {url:`http://127.0.0.1:${port}/`,controller,async close(){picker.close?.();await deployment.close();await controller.close();await new Promise(resolve=>server.close(resolve));}};
 }
 module.exports={startServer};

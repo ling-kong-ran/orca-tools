@@ -67,6 +67,16 @@ class GitTests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'uses Git'):control.sync_plan({'project_id':'fixture','files':[]})
   with self.assertRaisesRegex(ValueError,'uses Git'):control.upload_chunk({})
   with self.assertRaisesRegex(ValueError,'uses Git'):control.apply_sync('missing')
+ def test_git_process_uses_utc_and_status_never_returns_commit_identity_or_dates(self):
+  original=subprocess.run;calls=[]
+  def capture(command,**kwargs):
+   calls.append((command,kwargs['env'].get('TZ')))
+   return original(command,**kwargs)
+  with patch('native_git.subprocess.run',side_effect=capture):
+   status=ProjectGit(self.control,self.project,self.mirror).status()
+  self.assertTrue(calls);self.assertTrue(all(zone=='UTC0' for _,zone in calls))
+  self.assertEqual(set(status),{'branch','head','tracked_changes','untracked_files','remote','target_branch','auto_pull_before_render'})
+  self.assertNotIn('fixture@example.invalid',json.dumps(status))
  def test_render_pulls_remote_before_opening_scene(self):
   client=self.source/'client';client.mkdir();(client/'main.tscn').write_text('[gd_scene]\n[node name="Fixture" type="Node"]\n')
   (self.source/'scene.txt').write_text('latest before render');self.cmd(['add','scene.txt','client/main.tscn'],self.source);self.cmd(['commit','-m','render update'],self.source);self.cmd(['push','origin','main'],self.source)

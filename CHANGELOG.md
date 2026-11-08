@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-08 — 注册流程补充 / Toolkit 1.4.1
+
+- 账号授权页、远程登录交接、Agent 包和教程补充指纹浏览器经 VPS 代理出口访问 Claude 官方网站的流程；浏览器出口与 SSH/Tailscale 分别核实，代理和授权材料不写入计划。
+
+## 2026-11-08 — 部署中心预览版 / Toolkit 1.4.0
+
+- 增加统一部署中心、Windows 独立安装助手和无凭据 Agent 部署包；共用环境预检、固定安装阶段、授权交接、服务配置和实际 RPC 验证。
+- 默认走 Tailscale，SSH 主机指纹需核实；密码与私钥仅保存在连接内存，同一 VPS 跨进程互斥，中断后先重新检查。
+- 新环境安装普通用户 Claude Code、VPS Orca 和私网服务；已有服务和活动任务保留，不自动重启或迁移。
+- Git 独立服务提供固定操作、源码工作区和可选单仓库 Deploy Key；真实 Git 集成测试通过，root 隔离及 Orca worktree / 会话兼容性仍待验收，明确标为实验模式。
+- 独立包含校验后的官方 Python、锁定 SSH 依赖、完整性清单和 UTC ZIP 时间戳；官方登录、设备授权及插件审核由本人完成。
+
+## 2026-11-01 — VPS transfer time / MCP 1.9.2
+
+- ComfyUI、原生渲染、项目文件与 Tripo 下载统一使用接收 VPS 的文件时间；完整日期+时间文件名从本机 +08:00 转到 VPS 时区，显式带偏移的名字按原偏移换算，跨日正确，字节和 SHA-256 不变。
+- 本机受控 Git 操作固定 UTC 进程环境，工具状态继续不返回提交邮箱、作者或日期；提供本机 Git UTC 启动脚本和仓库代理操作约定。Git 历史与文件内部元数据不做隐式重写。
+
 ## 2026-10-29 — Tripo Studio / MCP 1.7.1
 
 - GPU 模块加入 `tripo-local`：经桥调用本机的 Tripo Studio 会员账号（第三方插件 Ador-able/tripo-studio-mcp），工具列表运行时从桥上拉取，另有 `tripo_upload`、`tripo_download` 传文件。

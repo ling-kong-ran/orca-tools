@@ -8,7 +8,10 @@ import shutil
 
 root = Path(__file__).resolve().parents[1]
 files = [p for p in root.rglob('*') if p.is_file() and
-         not any(x in p.parts for x in ('.git', '__pycache__', 'node_modules'))]
+         not any(x in p.parts for x in ('.git', '__pycache__', 'node_modules', '.build', 'dist', 'dependencies')) and
+         not (p.suffix.lower() in ('.png', '.jpg', '.webp', '.gif') and
+              any(p.is_relative_to(directory) for directory in
+                  (root/'docs/images', root/'plugins/toolkit/modules/deploy-runtime/docs/images')))]
 errors = []
 node = shutil.which('node')
 patterns = [r'gh[pousr]_[A-Za-z0-9_]{20,}', r'github_pat_[A-Za-z0-9_]{20,}',

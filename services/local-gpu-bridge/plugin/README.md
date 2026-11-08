@@ -10,6 +10,10 @@ Request IDs can be reused with identical inputs. Re-submitting a confirmed faile
 
 Downloaded ComfyUI/native/project files use the receiving VPS clock for access/modification times at transfer completion. Download receipts include saved_at with a timezone offset, timezone, and timestamp_source=receiver. Unix timestamps represent an absolute instant; file-browser displays can still use the viewer’s timezone.
 
+The same receipt policy also covers Tripo downloads. Complete date-and-time tokens in downloaded basenames are converted from the sender's +08:00 wall clock (or an explicit offset/Z) to the VPS timezone, including date rollover; normalized names include Z or an offset. Date-only asset/version labels are preserved. Source handles remain unchanged for retrieval, file bytes and SHA-256 are unchanged, and the returned saved path is authoritative. This is not a rewrite of timestamps embedded inside ZIP/EXIF/video/project content or Git objects.
+
+The verified deployment VPS uses UTC. Native project Git commands run with TZ=UTC0 and return no commit author, email or dates. For local repository Git operations use `python scripts/git-vps-time.py -C <repo> <git args>` to give new commits UTC timestamps without changing Windows time. Fetch/pull preserve existing Git objects (including historical author offsets); removing those requires a separate history migration, not a filesystem time adjustment.
+
 VRoid Studio (1.5+): vroid-local provides vroid_tools and vroid_operation, sharing approved projects and file downloads. See docs/vroid.md in the repository for pinned local installation and scope. Toolkit 1.6 adds export_vrm after installing scripts/install-vroid-export.py on the PC: explicit project .vrm path, title/author and optional format 1.0|0.0/replace.
 
 Tripo Studio (1.7+): tripo-local exposes the GPU computer's Tripo Studio workflow tools for the user's own membership account (the site is chosen on the PC with tripo.region), plus tripo_upload and tripo_download for files. Account tools stay on the PC. See docs/tripo.md in the repository and /local-gpu:tripo.

@@ -9,11 +9,12 @@ function fragment(file){
  return {style,script,content};
 }
 function compose(initial='overview'){
- let shell=fs.readFileSync(path.join(__dirname,'index.html'),'utf8').replace('__SHELL_STYLE__',fs.readFileSync(path.join(__dirname,'theme.css'),'utf8'));
+ let shell=fs.readFileSync(path.join(__dirname,'index.html'),'utf8').replace('__SHELL_STYLE__',fs.readFileSync(path.join(__dirname,'theme.css'),'utf8')).replace('v1.2.1','v'+JSON.parse(fs.readFileSync(path.join(__dirname,'orca-plugin.json'),'utf8')).version);
  const skin=fs.readFileSync(path.join(__dirname,'module-theme.css'),'utf8');
- const definitions=[['accounts','accounts.html','/api/','/api/'],['downloads','modules/downloads/index.html','/api/','/api/downloads/'],['gpu','modules/gpu-panel.html','/api/','/api/gpu/']];
+ const definitions=[['accounts','accounts.html','/api/','/api/'],['downloads','modules/downloads/index.html','/api/','/api/downloads/'],['gpu','modules/gpu-panel.html','/api/','/api/gpu/'],['deploy','modules/deploy.html','/api/','/api/']];
  const scripts=definitions.map(([name,file,from,to])=>{
   const f=fragment(file);let script=f.script;
+  if(name==='deploy')f.content=f.content.replace('<main>','<main class="deploy-embedded">');
   if(name==='gpu')script=script.replaceAll("'X-Admin-Token'","'X-Toolkit-Token'");
   script=script.replaceAll("'"+from,"'"+to);
   // Static source assembled on the server, not evaluated or fetched as code.
