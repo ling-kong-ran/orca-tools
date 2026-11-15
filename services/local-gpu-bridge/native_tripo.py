@@ -17,7 +17,7 @@ REGIONS = {
     'cn': {'studio': 'https://studio.tripo3d.com', 'api': 'https://api-cn.tripo3d.com', 'account': 'https://www.tripo3d.com',
            'port': 32176, 'cdp': 9223, 'data': 'TripoStudioMCP-cn'},
 }
-PATCH_VERSION = 5
+PATCH_VERSION = 14
 SCHEDULER_PATCHES = [
     ('var MAX_CONCURRENCY = 10;', 'var MAX_CONCURRENCY = 3;'),
     ('current.consecutive_accepted += 1;', 'current.consecutive_accepted = Math.min(5, current.consecutive_accepted + 1);'),
@@ -41,6 +41,81 @@ RECOVER_ACTION_READ = '''    const binding = await this.#index.get(actionId);
     const snapshot = await this.#backendSnapshot(binding);
     if (["submitted", "queued", "running"].includes(snapshot.status) && this.#ownsBindingAccount(binding)) this.#observe(binding);
     return await this.#publicAction(binding, snapshot);'''
+GLOBAL_CAPTURE_FALLBACK = '''if (!triggered && !settled) {
+            // Do not depend on a framework helper being exposed on window. Observe
+            // the official page's own successful account request instead, then
+            // independently verify its Bearer with the same nonce-bound GET.
+            const observe = (timeout) => page.waitForResponse((response) => {
+              try {
+                const request = response.request();
+                const url = new URL(response.url());
+                const expected = new URL(AUTH_VERIFICATION_URL);
+                return request.url() === response.url() && url.origin === expected.origin && url.pathname === expected.pathname &&
+                  url.username === "" && url.password === "" && request.method() === "GET" &&
+                  request.frame() === page.mainFrame();
+              } catch { return false; }
+            }, { timeout });
+            // Startup already navigates to Studio. Let its own account request
+            // finish before considering a reload; interrupting it can trigger 403.
+            let { response } = await observe(Math.min(3000, this.#config.tokenCaptureTimeoutMs))
+              .then((response) => ({ response }), () => ({ response: null }));
+            if (settled) return;
+            let navigation;
+            if (!response) {
+              // Attach rejection handling before navigation so no promise is orphaned.
+              const evidence = observe(Math.min(12000, this.#config.tokenCaptureTimeoutMs))
+                .then((response) => ({ response }), () => ({ response: null }));
+              navigation = await page.reload({ waitUntil: "domcontentloaded", timeout: this.#config.requestTimeoutMs });
+              ({ response } = await evidence);
+            }
+            if (settled) return;
+            const current = new URL(page.url());
+            if (current.origin !== STUDIO_ORIGIN || current.username !== "" || current.password !== "") throw new Error("untrusted navigation");
+            if (/just a moment|access denied|attention required|security verification/i.test(await page.title())) {
+              throw new Error("browser verification required");
+            }
+            if (navigation && navigation.status() >= 400) throw new Error("Studio page HTTP " + navigation.status());
+            if (await page.getByRole("button", { name: /^(?:注册\\s*[/／]\\s*登录|sign\\s*up\\s*[/／]\\s*(?:log\\s*in|sign\\s*in)|log\\s*in|sign\\s*in)$/i }).first().isVisible().catch(() => false)) {
+              throw new Error("dedicated browser signed out");
+            }
+            if (!response) throw new Error("official session request unavailable");
+            if (response.status() !== 200) throw new Error("official session request HTTP " + response.status());
+            const raw = await response.body();
+            let envelope;
+            try {
+              if (raw.byteLength > MAX_AUTH_VERIFICATION_BYTES) throw new Error("official session request rejected");
+              envelope = apiEnvelopeSchema.safeParse(JSON.parse(raw.toString("utf8")));
+            }
+            finally { raw.fill(0); }
+            if (!envelope.success || envelope.data.code !== 0) throw new Error("official session request rejected");
+            const headers = await response.request().allHeaders();
+            const authorization = headers.authorization;
+            const deviceId = headers["x-tripo-device-id"];
+            const region = headers["x-tripo-region"];
+            if (!authorization?.startsWith("Bearer ") || authorization.length > 16384 ||
+                deviceId && deviceId.length > 256 || region && region.length > 32) {
+              throw new Error("official session request rejected");
+            }
+            const verified = await context2.request.get(expectedVerificationUrl, {
+              headers: { authorization, accept: "application/json", origin: STUDIO_ORIGIN,
+                ...(deviceId ? { "x-tripo-device-id": deviceId } : {}),
+                ...(region ? { "x-tripo-region": region } : {}) },
+              timeout: Math.min(15000, this.#config.requestTimeoutMs), maxRedirects: 0
+            });
+            try {
+              if (settled) return;
+              const body = await verified.body();
+              let proof;
+              try {
+                if (body.byteLength > MAX_AUTH_VERIFICATION_BYTES) throw new Error("official session verification rejected");
+                proof = apiEnvelopeSchema.safeParse(JSON.parse(body.toString("utf8")));
+              } finally { body.fill(0); }
+              if (verified.status() !== 200 || verified.url() !== expectedVerificationUrl || !proof.success || proof.data.code !== 0) {
+                throw new Error("official session verification rejected");
+              }
+              finish(() => resolve3({ authorization, ...(deviceId ? { deviceId } : {}), ...(region ? { region } : {}) }));
+            } finally { await verified.dispose(); }
+          }'''
 # Credentials, account switching and the local gallery never cross the bridge.
 HIDDEN = {'tripo_set_account', 'tripo_clear_account', 'tripo_open_gallery'}
 HANDLE = re.compile(r'tripo:(inputs|assets|archive)/([^\x00-\x1f"<>|?*]{1,512})')
@@ -128,8 +203,28 @@ def inside(root, relative):
 
 
 def patches(region):
-    """Exact edits for a non-global copy; each old text must occur once in the plugin bundle."""
-    if region == 'global': return {}
+    """Exact managed-runtime edits; each old text must occur once in the plugin bundle."""
+    reuse_session = ('session2.status().authenticated || credentialStatus?.state === "available"',
+                     'session2.status().authenticated || credentialStatus?.state === "available" || process.env.TRIPO_REUSE_BROWSER_SESSION === "1"')
+    if region == 'global':
+        browser_only = ('if (isRecoverableCaptureFailure(error3)) break;',
+                        'if (isRecoverableCaptureFailure(error3)) { if (process.env.TRIPO_REUSE_BROWSER_SESSION === "1") throw error3; break; }')
+        capture_error = ('} catch {\n          finish(\n            () => reject(\n              new TripoError("AUTH_CAPTURE_FAILED", "Failed to verify the signed-in Studio account on the trusted page.", {',
+                         '} catch (captureError) {\n          const phase = ["signed-in surface unavailable", "verification request unavailable", "verification request rejected", "untrusted navigation", "dedicated browser signed out", "Studio page HTTP 401", "Studio page HTTP 403", "Studio page HTTP 404", "Studio page HTTP 429", "Studio page HTTP 502", "Studio page HTTP 503", "browser verification required", "official session request unavailable", "official session request HTTP 401", "official session request HTTP 403", "official session request HTTP 404", "official session request HTTP 429", "official session request rejected", "official session verification rejected"].includes(captureError?.message) ? captureError.message : "verification failed";\n          finish(\n            () => reject(\n              new TripoError("AUTH_CAPTURE_FAILED", "Failed to verify the signed-in Studio account: " + phase + ".", {')
+        # A rendered avatar is not an authentication boundary. Keep the trusted,
+        # nonce-bound payment request and verified Bearer response as the proof.
+        avatar_wait = ('while (!settled && Date.now() < readinessDeadline) {\n            let signedIn = false;',
+                       'while (process.env.TRIPO_REUSE_BROWSER_SESSION !== "1" && !settled && Date.now() < readinessDeadline) {\n            let signedIn = false;')
+        avatar_guard = ('if (stableSignedInChecks < SIGNED_IN_STABILITY_CHECKS && !settled) {',
+                        'if (process.env.TRIPO_REUSE_BROWSER_SESSION !== "1" && stableSignedInChecks < SIGNED_IN_STABILITY_CHECKS && !settled) {')
+        helper_wait = ('while (!settled && Date.now() < readinessDeadline) {\n            let result2;',
+                       'while (process.env.TRIPO_REUSE_BROWSER_SESSION !== "1" && !settled && Date.now() < readinessDeadline) {\n            let result2;')
+        fallback = ('if (!triggered && !settled) throw new Error("verification request unavailable");', GLOBAL_CAPTURE_FALLBACK)
+        visible_launch = ('      "--headless=new",',
+                          '      ...(process.env.TRIPO_BROWSER_HEADLESS === "0" ? [] : ["--headless=new"]),')
+        visible_ownership = ('!args.includes("--headless=new") || normalizedPath(',
+                             '!(process.env.TRIPO_BROWSER_HEADLESS === "0" ? args.includes("--enable-automation") && !args.includes("--headless=new") : args.includes("--headless=new")) || normalizedPath(')
+        return {'mcp/server.mjs': [reuse_session, browser_only, capture_error, avatar_wait, avatar_guard, helper_wait, fallback, visible_launch, visible_ownership]}
     site, base = REGIONS[region], REGIONS['global']
     port = (f'var TRIPO_MCP_HTTP_PORT = {base["port"]};', f'var TRIPO_MCP_HTTP_PORT = {site["port"]};')
     host = lambda url: url.split('//', 1)[1]
@@ -141,8 +236,7 @@ def patches(region):
                            (f':{host(base["studio"])}`', f':{host(site["studio"])}`'),
                            ('`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
                             '`orca-tripo-' + region + '-server\\0${process.env.TRIPO_DATA_DIR}\\0${options2.identity ?? currentUserIdentity()}`'),
-                           ('session2.status().authenticated || credentialStatus?.state === "available"',
-                            'session2.status().authenticated || credentialStatus?.state === "available" || process.env.TRIPO_REUSE_BROWSER_SESSION === "1"'),
+                           reuse_session,
                            ('if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
                             'if (process.env.TRIPO_COOKIE_ONLY === "1" || (options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();'), port],
         'mcp/bootstrap.mjs': [port],
@@ -228,6 +322,9 @@ class TripoControl:
         env = dict(os.environ, TZ='UTC', NODE_USE_ENV_PROXY='1', TRIPO_DATA_DIR=str(self.data_dir), TRIPO_REUSE_BROWSER_SESSION='1',
                    TRIPO_CHROME_CDP_URL=f'http://127.0.0.1:{self.site["cdp"]}')
         if self.region=='cn':env['TRIPO_COOKIE_ONLY']='1'
+        # The global site currently rejects headless navigation with HTTP 403.
+        # Use a normal dedicated browser; retain every profile/CDP ownership check.
+        else:env['TRIPO_BROWSER_HEADLESS']='0'
         # Pin the browser so the dedicated profile is never opened by two different browsers.
         try: env['TRIPO_CHROME_EXECUTABLE'] = find_browser(self.browser)
         except ValueError: pass

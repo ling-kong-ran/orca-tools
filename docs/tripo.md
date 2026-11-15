@@ -57,9 +57,16 @@ GPU Bridge 的远端 JSON 出口统一过滤本机身份、网络地址、区域
 ```powershell
 python scripts/tripo-login.py            # 按配置的 region
 python scripts/tripo-login.py --region cn
+python scripts/tripo-login.py --region global
 ```
 
-它先停掉插件的后台服务，再用有界面的浏览器打开专用 profile。在里面正常登录（国内站可用手机号、微信），看到工作台后关窗口。之后插件用无头浏览器复用这个 profile 读取会话，不保存密码。会话过期时 `tripo_get_status` 显示 `authenticated:false`，再跑一次登录脚本即可。登录期间不要在 VPS 上提交 Tripo 任务。
+它先停掉插件的后台服务，再用有界面的浏览器打开专用 profile。在里面正常登录（国内站可用手机号、微信），看到工作台后关窗口。后台会复用这个 profile，不保存密码；日常 Edge 窗口里的登录不会自动共享给插件。`--region` 仅选择这次登录的站点；实际调用仍按配置文件的 `tripo.region`，两者应保持一致。
+
+本机验证时国际站拒绝了无界面浏览器访问（HTTP 403），因此 `global` 后台使用可见的专用浏览器，启动后会再出现一个窗口，使用期间请保留。它仍校验专用 profile、所有权标记及本机调试端口，并通过官方账号接口验证会话；不会把 Cookie/JWT 传给 VPS。国内站继续使用无界面模式。
+
+若仍返回 403，或本机诊断显示 `browser verification required`，请检查这个专用窗口，并手动完成网站要求的交互。服务会按退避间隔重试；不要反复重启、重复提交生成任务或把 Cookie 发到聊天中。出现正常网页也不等于工具验证已成功，仍需核对下面的状态。
+
+会话过期时 `tripo_get_status` 显示 `authenticated:false`，再跑一次登录脚本即可。登录期间不要在 VPS 上提交 Tripo 任务。确认登录完成应以状态工具的 `authenticated:true` 和可用积分为准；无需提交扣费的生成任务。
 
 国内站也支持导入用户明确提供的现有会话 Cookie：
 

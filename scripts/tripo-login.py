@@ -1,6 +1,7 @@
 """Sign in to Tripo Studio once, by hand, in the bridge's dedicated browser profile (Windows only).
 
-The plugin later reuses that profile headless to read the signed-in session; no password is stored.
+The plugin later reuses that profile to read the signed-in session; no password is stored.
+The global site needs a visible dedicated browser; keep its new runtime window open.
 Run it while no Tripo workflow is starting: it stops the plugin's background service first.
 """
 import argparse

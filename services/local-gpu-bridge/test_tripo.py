@@ -23,6 +23,22 @@ SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STU
                     'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
                     native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ] + [old for old, _ in native_tripo.SCHEDULER_PATCHES])
 
+# Pinned upstream snippets: a changed bundle must fail closed rather than receive
+# a partial auth patch. Behavioral tests below exercise the replacement itself.
+GLOBAL_AUTH = '''if (isRecoverableCaptureFailure(error3)) break;
+} catch {
+          finish(
+            () => reject(
+              new TripoError("AUTH_CAPTURE_FAILED", "Failed to verify the signed-in Studio account on the trusted page.", {
+while (!settled && Date.now() < readinessDeadline) {
+            let signedIn = false;
+if (stableSignedInChecks < SIGNED_IN_STABILITY_CHECKS && !settled) {
+if (!triggered && !settled) throw new Error("verification request unavailable");
+while (!settled && Date.now() < readinessDeadline) {
+            let result2;
+      "--headless=new",
+!args.includes("--headless=new") || normalizedPath('''
+
 
 class TripoTests(unittest.TestCase):
     def setUp(self):
@@ -188,10 +204,95 @@ if(legacy().concurrency_limit!==3)throw Error('Legacy concurrency was not clampe
         with self.assertRaisesRegex(ValueError, 'bridge update'): self.control.runtime_root()
         self.assertFalse((self.root / 'bridge/tripo/cn/0.9.0').exists())
 
-    def test_global_region_runs_the_plugin_unchanged(self):
+    def test_global_region_reuses_login_without_changing_the_site(self):
         control = TripoControl({**self.config, 'tripo': {**self.config['tripo'], 'region': 'global'}})
-        self.assertEqual(control.runtime_root(), self.cache / '0.8.0')
+        source = self.cache / '0.8.0/mcp/server.mjs'
+        fixture = SERVER + '\n' + GLOBAL_AUTH
+        source.write_text(fixture, encoding='utf-8')
+        root = control.runtime_root()
+        self.assertNotEqual(root, self.cache / '0.8.0')
+        server = (root / 'mcp/server.mjs').read_text(encoding='utf-8')
+        self.assertIn('process.env.TRIPO_REUSE_BROWSER_SESSION === "1"', server)
+        for setting in ('studio', 'api', 'account'):
+            self.assertIn('"' + REGIONS['global'][setting] + '"', server)
+        self.assertEqual(source.read_text(encoding='utf-8'), fixture)
+        self.assertEqual((root / 'mcp/bootstrap.mjs').read_bytes(), (self.cache / '0.8.0/mcp/bootstrap.mjs').read_bytes())
+        self.assertEqual(control.environment()['TRIPO_BROWSER_HEADLESS'], '0')
+        self.assertNotIn('TRIPO_BROWSER_HEADLESS', self.control.environment())
         with self.assertRaises(ValueError): TripoControl({'tripo': {'region': 'eu'}})
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_global_capture_requires_official_page_and_independent_account_proof(self):
+        code = '''import assert from 'node:assert/strict';
+const STUDIO_ORIGIN='https://studio.tripo3d.ai';
+const AUTH_VERIFICATION_URL='https://api.tripo3d.ai/v2/studio/user/profile/payment';
+const MAX_AUTH_VERIFICATION_BYTES=1024;
+const apiEnvelopeSchema={safeParse(value){return {success:Number.isInteger(value?.code),data:value}}};
+class Capture {
+#config={tokenCaptureTimeoutMs:1000,requestTimeoutMs:1000};
+async run(page,context2){
+let triggered=false,settled=false,captured;
+const finish=fn=>{if(!settled){settled=true;fn()}};
+const resolve3=value=>captured=value;
+const expectedVerificationUrl=AUTH_VERIFICATION_URL+'?auth_capture_nonce=test';
+''' + native_tripo.GLOBAL_CAPTURE_FALLBACK + '''
+return captured;
+}}
+async function attempt(options={}){
+ const frame={},bodies=[],calls=[];let observes=0,reloads=0;
+ const request={url:()=>options.requestUrl??options.url??AUTH_VERIFICATION_URL,
+  method:()=>options.method??'GET',frame:()=>options.foreignFrame?{}:frame,
+  allHeaders:async()=>({authorization:options.authorization??'Bearer test-only',
+   'x-tripo-device-id':'test-device','x-tripo-region':'test'})};
+ const body=value=>{const b=Buffer.from(value);bodies.push(b);return b};
+ const response={url:()=>options.url??AUTH_VERIFICATION_URL,request:()=>request,
+  status:()=>options.status??200,body:async()=>body(options.body??'{"code":0,"data":{}}')};
+ const page={mainFrame:()=>frame,url:()=>options.pageUrl??STUDIO_ORIGIN+'/workspace/generate',
+  waitForResponse:async predicate=>{observes++;if(options.initialMiss&&observes===1||!predicate(response))throw Error('not matched');return response},
+  reload:async()=>{reloads++;return {status:()=>options.navigationStatus??200}},title:async()=>options.title??'Tripo Studio',
+  getByRole:()=>({first:()=>({isVisible:async()=>options.signedOut??false})})};
+ let disposed=false;
+ const context2={request:{get:async(url,opts)=>{
+  calls.push(url);assert.equal(url,AUTH_VERIFICATION_URL+'?auth_capture_nonce=test');
+  assert.equal(opts.maxRedirects,0);assert.equal(opts.headers.authorization,'Bearer test-only');
+  assert.equal(opts.headers.origin,STUDIO_ORIGIN);
+  return {status:()=>options.proofStatus??200,url:()=>options.proofUrl??url,
+   body:async()=>body(options.proofBody??'{"code":0,"data":{}}'),dispose:async()=>{disposed=true}};
+ }}};
+ try{return {captured:await new Capture().run(page,context2),calls,disposed,reloads}}
+ finally{for(const b of bodies)assert.ok(b.every(byte=>byte===0),'response body must be wiped')}
+}
+const good=await attempt();assert.equal(good.captured.authorization,'Bearer test-only');
+assert.equal(good.calls.length,1);assert.ok(good.disposed);assert.equal(good.reloads,0);
+const loaded=await attempt({initialMiss:true});assert.equal(loaded.reloads,1);
+assert.equal(loaded.captured.authorization,'Bearer test-only');
+for(const options of [
+ {url:'https://api.tripo3d.ai.evil.test/v2/studio/user/profile/payment'},
+ {url:'https://api.tripo3d.ai/v2/other'}, {url:'https://user@api.tripo3d.ai/v2/studio/user/profile/payment'},
+ {requestUrl:'https://evil.test/redirect'}, {foreignFrame:true},{method:'POST'},
+ {pageUrl:'https://evil.test/'},{initialMiss:true,navigationStatus:403},{title:'Just a moment'}, {signedOut:true},
+ {status:401},{body:'{"code":1}'},{body:'invalid json'},{body:' '.repeat(1025)},
+ {authorization:'Basic test-only'},{authorization:'Bearer '+ 'x'.repeat(16384)},
+ {proofStatus:403},{proofUrl:AUTH_VERIFICATION_URL},{proofBody:'{"code":1}'},
+ {proofBody:' '.repeat(1025)}
+])await assert.rejects(()=>attempt(options));
+'''
+        result = subprocess.run(['node', '--input-type=module', '-e', code], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_visible_browser_mode_preserves_automation_ownership_requirement(self):
+        pairs = dict(native_tripo.patches('global')['mcp/server.mjs'])
+        predicate = pairs['!args.includes("--headless=new") || normalizedPath('].split(' || normalizedPath(')[0]
+        code = '''import assert from 'node:assert/strict';
+function rejected(args,mode){process.env.TRIPO_BROWSER_HEADLESS=mode;return ''' + predicate + '''}
+assert.equal(rejected(['--enable-automation'],'0'),false);
+assert.equal(rejected([],'0'),true);
+assert.equal(rejected(['--enable-automation','--headless=new'],'0'),true);
+assert.equal(rejected(['--headless=new'],'1'),false);
+assert.equal(rejected(['--enable-automation'],'1'),true);
+'''
+        subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
 
     def test_login_profile_is_marked_for_the_plugin(self):
         profile = self.control.profile_dir()
