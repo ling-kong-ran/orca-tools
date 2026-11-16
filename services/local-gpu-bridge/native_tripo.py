@@ -17,7 +17,7 @@ REGIONS = {
     'cn': {'studio': 'https://studio.tripo3d.com', 'api': 'https://api-cn.tripo3d.com', 'account': 'https://www.tripo3d.com',
            'port': 32176, 'cdp': 9223, 'data': 'TripoStudioMCP-cn'},
 }
-PATCH_VERSION = 15
+PATCH_VERSION = 16
 SCHEDULER_PATCHES = [
     ('var MAX_CONCURRENCY = 10;', 'var MAX_CONCURRENCY = 3;'),
     ('current.consecutive_accepted += 1;', 'current.consecutive_accepted = Math.min(5, current.consecutive_accepted + 1);'),
@@ -26,6 +26,52 @@ SCHEDULER_PATCHES = [
      'return clone8({ ...(document2.accounts[accountFingerprint] ?? defaultSchedulerState()), concurrency_limit: 3 });'),
     ('const state2 = clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState());',
      'const state2 = clone8(document2.accounts[accountFingerprint] ?? defaultSchedulerState()); state2.concurrency_limit = 3;'),
+]
+# Reconcile only the known bookkeeping failure, and only from a completed,
+# already-bound action. Never retry, schedule or submit a paid operation here.
+SCHEDULER_RECONCILE = '''  async #reconcileSchedulerFailure(record2) {
+    const eligible = (record) => record.status === "failed" &&
+      record.failure?.message === "The workflow scheduler state is invalid." &&
+      record.failure?.reason === "INVALID_INPUT" && record.failure?.retryable === false &&
+      record.steps.length === 1 && record.steps[0].state === "failed" &&
+      typeof record.steps[0].action_id === "string" &&
+      record.events.some(event => event.phase === "scheduler" && event.code === "INVALID_INPUT") &&
+      record.account_fingerprint === this.#actions.activeAccountFingerprint();
+    if (!eligible(record2)) return;
+    const step = record2.steps[0];
+    try {
+      const bound = await this.#actions.findWorkflowStepAction(record2.workflow_id, step.step_id);
+      if (!bound || bound.action_id !== step.action_id) return;
+      const action = ActionSchema.parse(await this.#actions.get(step.action_id));
+      if (action.action_id !== step.action_id || action.state !== "succeeded") return;
+      const result = stepResult(action);
+      if (!result.gallery_files.length) return;
+      let recovered = false;
+      await this.#ledger.update(record2.workflow_id, current => {
+        if (!eligible(current) || current.steps[0].action_id !== step.action_id) return;
+        current.steps[0].state = "succeeded";
+        current.steps[0].result = result;
+        current.steps[0].last_successful_check_at = new Date(this.#now()).toISOString();
+        current.status = "succeeded";
+        delete current.failure;
+        recovered = true;
+      });
+      if (recovered) await this.#log(record2.workflow_id, {
+        code: "SCHEDULER_RESULT_RECOVERED", level: "info", phase: "recovery",
+        message: "Recovered the completed original action and archived files; no generation was resubmitted."
+      });
+    } catch (error3) {
+      reportProcessFault("scheduler_result_recovery", error3);
+    }
+  }'''
+WORKFLOW_RECOVERY_PATCHES = [
+    ('  async #recoverWorkflow(initial) {', SCHEDULER_RECONCILE + '\n  async #recoverWorkflow(initial) {'),
+    ('      if (record2.account_fingerprint !== accountFingerprint || TERMINAL_WORKFLOW_STATUSES.has(record2.status)) continue;',
+     '      await this.#reconcileSchedulerFailure(record2);\n'
+     '      if (record2.account_fingerprint !== accountFingerprint || TERMINAL_WORKFLOW_STATUSES.has(record2.status)) continue;'),
+    ('        await this.#recordAccepted(record2.account_fingerprint, workflowId);',
+     '        try { await this.#recordAccepted(record2.account_fingerprint, workflowId); }\n'
+     '        catch (error3) { reportProcessFault("scheduler_bookkeeping", error3); }'),
 ]
 UPLOAD_CLIENT = '            useAccelerateEndpoint: transport.useAccelerateEndpoint'
 CN_UPLOAD_CLIENT = UPLOAD_CLIENT + ''',
@@ -200,13 +246,13 @@ def patches(region):
         method = ('  async #studioPage(context2) {', COOKIE_SESSION_METHOD + '\n  async #studioPage(context2) {')
         launch = ('  const studioUrl = `${config2.studioOrigin}/workspace/generate`;',
                   '  const studioUrl = process.env.TRIPO_REUSE_BROWSER_SESSION === "1" ? "about:blank" : `${config2.studioOrigin}/workspace/generate`;')
-        return {'mcp/server.mjs': [reuse_session, recovery, capture, method, launch,
+        return {'mcp/server.mjs': SCHEDULER_PATCHES + WORKFLOW_RECOVERY_PATCHES + [reuse_session, recovery, capture, method, launch,
                                    (ACTION_READ, RECOVER_ACTION_READ)]}
     site, base = REGIONS[region], REGIONS['global']
     port = (f'var TRIPO_MCP_HTTP_PORT = {base["port"]};', f'var TRIPO_MCP_HTTP_PORT = {site["port"]};')
     host = lambda url: url.split('//', 1)[1]
     return {
-        'mcp/server.mjs': SCHEDULER_PATCHES + [(UPLOAD_CLIENT, CN_UPLOAD_CLIENT), (ACTION_READ, RECOVER_ACTION_READ),
+        'mcp/server.mjs': SCHEDULER_PATCHES + WORKFLOW_RECOVERY_PATCHES + [(UPLOAD_CLIENT, CN_UPLOAD_CLIENT), (ACTION_READ, RECOVER_ACTION_READ),
                            (f'var STUDIO_ORIGIN = "{base["studio"]}";', f'var STUDIO_ORIGIN = "{site["studio"]}";'),
                            (f'var STUDIO_API_BASE_URL = "{base["api"]}";', f'var STUDIO_API_BASE_URL = "{site["api"]}";'),
                            (f'var TRIPO_ACCOUNT_ORIGIN = "{base["account"]}";', f'var TRIPO_ACCOUNT_ORIGIN = "{site["account"]}";'),

@@ -21,7 +21,8 @@ SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STU
                     '`tripo-studio-global-server\\0${options2.identity ?? currentUserIdentity()}`',
                     'session2.status().authenticated || credentialStatus?.state === "available"',
                     'if ((options2.platform ?? process.platform) !== "win32") return new InteractionRequiredCredentialStore();',
-                    native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ] + [old for old, _ in native_tripo.SCHEDULER_PATCHES])
+                    native_tripo.UPLOAD_CLIENT, native_tripo.ACTION_READ] +
+                    [old for old, _ in native_tripo.SCHEDULER_PATCHES + native_tripo.WORKFLOW_RECOVERY_PATCHES])
 
 # Pinned upstream snippets: a changed bundle must fail closed rather than receive
 # a partial auth patch. Behavioral tests below exercise the replacement itself.
@@ -77,6 +78,50 @@ if(r.count!==(owned&&['submitted','queued','running'].includes(status)?1:0))thro
         self.control.ensure_started()
         with unittest.mock.patch.object(self.control, 'login_active', return_value=True):
             with self.assertRaisesRegex(ValueError, 'sign-in is in progress'): self.control.ensure_started()
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
+    def test_scheduler_failure_recovery_never_resubmits_or_recovers_other_failures(self):
+        code = '''import assert from 'node:assert/strict';
+const ActionSchema={parse:x=>x},stepResult=x=>x.result,reportProcessFault=()=>{};
+const original=()=>({workflow_id:'workflow',account_fingerprint:'owner',status:'failed',
+ failure:{message:'The workflow scheduler state is invalid.',reason:'INVALID_INPUT',retryable:false},
+ events:[{phase:'scheduler',code:'INVALID_INPUT'}],
+ steps:[{step_id:'mesh',action_id:'paid-once',state:'failed'}]});
+class Recovery {
+ #actions;#ledger;#now=()=>0;logs=[];reads=0;
+ constructor(record,options={}) {
+  this.record=record;
+  this.#actions={activeAccountFingerprint:()=>options.account??'owner',
+   start:()=>{throw Error('MUST NOT SUBMIT')},
+   findWorkflowStepAction:async()=>({action_id:options.binding??'paid-once'}),
+   get:async()=>{this.reads++;if(options.readFails)throw Error('unavailable');return {
+    action_id:options.actionId??'paid-once',state:options.state??'succeeded',
+    result:{gallery_files:options.files??['files/existing/model-1'],project_ids:['existing']}}}};
+  this.#ledger={update:async(id,mutate)=>{options.beforeUpdate?.(record);mutate(record)}};
+ }
+ async #log(id,event){this.logs.push(event)}
+ async run(){await this.#reconcileSchedulerFailure(structuredClone(this.record))}
+''' + native_tripo.SCHEDULER_RECONCILE + '''}
+const record=original(),r=new Recovery(record);await r.run();
+assert.equal(record.status,'succeeded');assert.equal(record.steps[0].action_id,'paid-once');
+assert.deepEqual(record.steps[0].result.gallery_files,['files/existing/model-1']);
+assert.equal(record.failure,undefined);assert.equal(r.logs.length,1);
+await r.run();assert.equal(r.logs.length,1);assert.equal(r.reads,1);
+for(const options of [{account:'different'},{binding:'different'},{actionId:'different'},
+ {state:'running'},{state:'failed'},{state:'outcome_unknown'},{files:[]},{readFails:true}]){
+ const record=original(),before=structuredClone(record),r=new Recovery(record,options);
+ await r.run();assert.deepEqual(record,before);assert.equal(r.logs.length,0);
+}
+for(const change of [r=>r.failure.message='other',r=>r.failure.reason='CANCELLED',
+ r=>r.failure.retryable=true,r=>r.events=[],r=>delete r.steps[0].action_id,
+ r=>r.steps.push({step_id:'pending',state:'pending'}),r=>r.status='succeeded']){
+ const record=original();change(record);const before=structuredClone(record),r=new Recovery(record);
+ await r.run();assert.deepEqual(record,before);assert.equal(r.reads,0);
+}
+const cancelled=original(),c=new Recovery(cancelled,{beforeUpdate:r=>r.failure.reason='CANCELLED'});
+await c.run();assert.equal(cancelled.status,'failed');assert.equal(c.logs.length,0);
+'''
+        subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
     def test_scheduler_counters_stay_valid_after_many_acceptances_and_congestions(self):
@@ -211,6 +256,9 @@ if(legacy().concurrency_limit!==3)throw Error('Legacy concurrency was not clampe
         self.assertEqual(source.read_text(encoding='utf-8'), fixture)
         self.assertEqual((root / 'mcp/bootstrap.mjs').read_bytes(), (self.cache / '0.8.0/mcp/bootstrap.mjs').read_bytes())
         self.assertIn('about:blank', server)
+        # Region changes must never drop scheduler safety patches again.
+        for old, new in native_tripo.SCHEDULER_PATCHES + native_tripo.WORKFLOW_RECOVERY_PATCHES:
+            self.assertIn(new, server)
         self.assertNotIn('TRIPO_BROWSER_HEADLESS', control.environment())
         self.assertNotIn('TRIPO_BROWSER_HEADLESS', self.control.environment())
         with self.assertRaises(ValueError): TripoControl({'tripo': {'region': 'eu'}})

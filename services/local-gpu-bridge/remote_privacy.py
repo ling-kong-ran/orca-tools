@@ -29,6 +29,13 @@ ZONE_KEYS = {'timezone', 'timezoneid', 'localtimezone', 'systemtimezone', 'timez
 LOCAL_ZONE = re.compile(r'(?i)Asia/(?:Shanghai|Chongqing|Chungking|Harbin|Hong_Kong|Macao|Macau)|China Standard Time|中国标准时间|北京时间')
 PROVIDER = re.compile(r'(?i)\b(?:[a-z0-9-]+\.)*(?:bcebos\.com|tripo3d\.(?:com|ai))\b')
 ISO = re.compile(r'(?<!\w)\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)(?!\w)')
+# Public schema identifiers are syntax, not account/CDN resources. Exact values
+# only: arbitrary URLs (including query strings) must not bypass redaction.
+SCHEMA_URIS = frozenset({
+    'http://json-schema.org/draft-07/schema#',
+    'https://json-schema.org/draft/2019-09/schema',
+    'https://json-schema.org/draft/2020-12/schema',
+})
 
 
 def utc_time(match):
@@ -64,6 +71,9 @@ def remote_json(value, resources=False):
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
+            if key == '$schema':
+                if isinstance(item, str) and item in SCHEMA_URIS: result[key] = item
+                continue
             normalized = re.sub(r'[^a-z0-9]', '', key.lower())
             if normalized in PRIVATE: continue
             if normalized in ZONE_KEYS: continue

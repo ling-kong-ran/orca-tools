@@ -4,6 +4,18 @@ from remote_privacy import remote_json, remote_text
 
 
 class RemotePrivacyTests(unittest.TestCase):
+    def test_schema_identifiers_survive_the_tripo_boundary(self):
+        schema = {'$schema': 'http://json-schema.org/draft-07/schema#',
+                  'type': 'object', 'properties': {'page': {'type': 'integer', 'minimum': 1}}}
+        value = {'tools': [{'name': 'tripo_list_models', 'inputSchema': schema}]}
+        self.assertEqual(remote_json(value, resources=True), value)
+        self.assertEqual(json.loads(remote_json(json.dumps(schema), resources=True)), schema)
+        for secret in ('https://private.example/schema?token=secret',
+                       'http://json-schema.org/draft-07/schema#?secret', '[remote resource]'):
+            filtered = remote_json({**schema, '$schema': secret}, resources=True)
+            self.assertNotIn('$schema', filtered)
+        self.assertNotIn('url', remote_json({'url': 'https://private.example/file?token=secret'}, resources=True))
+
     def test_plain_text_email_and_url_credentials_are_filtered(self):
         text=remote_text('Contact user+tag@example.com; https://alice:private-secret@localhost/file?access_token=private-token&ok=1')
         for forbidden in ('user+tag@example.com','alice','private-secret','private-token'):self.assertNotIn(forbidden,text)
