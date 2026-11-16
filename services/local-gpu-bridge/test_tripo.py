@@ -25,19 +25,12 @@ SERVER = '\n'.join(['var STUDIO_ORIGIN = "https://studio.tripo3d.ai";', 'var STU
 
 # Pinned upstream snippets: a changed bundle must fail closed rather than receive
 # a partial auth patch. Behavioral tests below exercise the replacement itself.
-GLOBAL_AUTH = '''if (isRecoverableCaptureFailure(error3)) break;
-} catch {
-          finish(
-            () => reject(
-              new TripoError("AUTH_CAPTURE_FAILED", "Failed to verify the signed-in Studio account on the trusted page.", {
-while (!settled && Date.now() < readinessDeadline) {
-            let signedIn = false;
-if (stableSignedInChecks < SIGNED_IN_STABILITY_CHECKS && !settled) {
-if (!triggered && !settled) throw new Error("verification request unavailable");
-while (!settled && Date.now() < readinessDeadline) {
-            let result2;
-      "--headless=new",
-!args.includes("--headless=new") || normalizedPath('''
+GLOBAL_AUTH = '''    const surface = await this.#openAuthenticationSurface(recoveryGeneration);
+    const page = await this.#studioPage(context2);
+    const captured = await this.#captureToken(context2, page, true);
+  async #studioPage(context2) {
+  const studioUrl = `${config2.studioOrigin}/workspace/generate`;'''
+
 
 
 class TripoTests(unittest.TestCase):
@@ -217,80 +210,86 @@ if(legacy().concurrency_limit!==3)throw Error('Legacy concurrency was not clampe
             self.assertIn('"' + REGIONS['global'][setting] + '"', server)
         self.assertEqual(source.read_text(encoding='utf-8'), fixture)
         self.assertEqual((root / 'mcp/bootstrap.mjs').read_bytes(), (self.cache / '0.8.0/mcp/bootstrap.mjs').read_bytes())
-        self.assertEqual(control.environment()['TRIPO_BROWSER_HEADLESS'], '0')
+        self.assertIn('about:blank', server)
+        self.assertNotIn('TRIPO_BROWSER_HEADLESS', control.environment())
         self.assertNotIn('TRIPO_BROWSER_HEADLESS', self.control.environment())
         with self.assertRaises(ValueError): TripoControl({'tripo': {'region': 'eu'}})
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
-    def test_global_capture_requires_official_page_and_independent_account_proof(self):
+    def test_cookie_renewal_verifies_both_origins_without_navigating(self):
         code = '''import assert from 'node:assert/strict';
-const STUDIO_ORIGIN='https://studio.tripo3d.ai';
-const AUTH_VERIFICATION_URL='https://api.tripo3d.ai/v2/studio/user/profile/payment';
+const STUDIO_ORIGIN='https://studio.tripo3d.ai',STUDIO_API_BASE_URL='https://api.tripo3d.ai';
+const AUTH_VERIFICATION_URL=STUDIO_API_BASE_URL+'/v2/studio/user/profile/payment';
+const AUTH_URL='https://auth.tripo3d.ai/sessions/whoami?tokenize_as=default_jwt';
 const MAX_AUTH_VERIFICATION_BYTES=1024;
-const apiEnvelopeSchema={safeParse(value){return {success:Number.isInteger(value?.code),data:value}}};
+class TripoError extends Error {constructor(code,message,details){super(message);this.code=code}}
+const normalizeBearerToken=token=>({token,expiresAtMs:token==='expired'?0:Date.now()+3600000});
+const apiEnvelopeSchema={safeParse:data=>({success:Number.isInteger(data?.code),data})};
 class Capture {
-#config={tokenCaptureTimeoutMs:1000,requestTimeoutMs:1000};
-async run(page,context2){
-let triggered=false,settled=false,captured;
-const finish=fn=>{if(!settled){settled=true;fn()}};
-const resolve3=value=>captured=value;
-const expectedVerificationUrl=AUTH_VERIFICATION_URL+'?auth_capture_nonce=test';
-''' + native_tripo.GLOBAL_CAPTURE_FALLBACK + '''
-return captured;
-}}
-async function attempt(options={}){
- const frame={},bodies=[],calls=[];let observes=0,reloads=0;
- const request={url:()=>options.requestUrl??options.url??AUTH_VERIFICATION_URL,
-  method:()=>options.method??'GET',frame:()=>options.foreignFrame?{}:frame,
-  allHeaders:async()=>({authorization:options.authorization??'Bearer test-only',
-   'x-tripo-device-id':'test-device','x-tripo-region':'test'})};
- const body=value=>{const b=Buffer.from(value);bodies.push(b);return b};
- const response={url:()=>options.url??AUTH_VERIFICATION_URL,request:()=>request,
-  status:()=>options.status??200,body:async()=>body(options.body??'{"code":0,"data":{}}')};
- const page={mainFrame:()=>frame,url:()=>options.pageUrl??STUDIO_ORIGIN+'/workspace/generate',
-  waitForResponse:async predicate=>{observes++;if(options.initialMiss&&observes===1||!predicate(response))throw Error('not matched');return response},
-  reload:async()=>{reloads++;return {status:()=>options.navigationStatus??200}},title:async()=>options.title??'Tripo Studio',
-  getByRole:()=>({first:()=>({isVisible:async()=>options.signedOut??false})})};
- let disposed=false;
- const context2={request:{get:async(url,opts)=>{
-  calls.push(url);assert.equal(url,AUTH_VERIFICATION_URL+'?auth_capture_nonce=test');
-  assert.equal(opts.maxRedirects,0);assert.equal(opts.headers.authorization,'Bearer test-only');
-  assert.equal(opts.headers.origin,STUDIO_ORIGIN);
-  return {status:()=>options.proofStatus??200,url:()=>options.proofUrl??url,
-   body:async()=>body(options.proofBody??'{"code":0,"data":{}}'),dispose:async()=>{disposed=true}};
- }}};
- try{return {captured:await new Capture().run(page,context2),calls,disposed,reloads}}
- finally{for(const b of bodies)assert.ok(b.every(byte=>byte===0),'response body must be wiped')}
+#config={studioOrigin:STUDIO_ORIGIN,apiBaseUrl:STUDIO_API_BASE_URL,requestTimeoutMs:30000,deviceId:'test-device'};
+constructor(options){Object.assign(this.#config,options)}
+async run(context){return await this.#captureCookieSession(context)}
+''' + native_tripo.COOKIE_SESSION_METHOD + '''
 }
-const good=await attempt();assert.equal(good.captured.authorization,'Bearer test-only');
-assert.equal(good.calls.length,1);assert.ok(good.disposed);assert.equal(good.reloads,0);
-const loaded=await attempt({initialMiss:true});assert.equal(loaded.reloads,1);
-assert.equal(loaded.captured.authorization,'Bearer test-only');
+async function attempt(options={}) {
+ const calls=[],raws=[],disposed=[];
+ const context={request:{get:async(url,opts)=>{
+  const auth=url===AUTH_URL;
+  assert.ok(auth||url===AUTH_VERIFICATION_URL);
+  assert.equal(opts.maxRedirects,0);assert.ok(opts.timeout<=15000);
+  assert.equal(opts.headers.origin,STUDIO_ORIGIN);
+  assert.equal(opts.headers.Cookie,undefined);assert.equal(opts.headers.cookie,undefined);
+  if(auth)assert.equal(opts.headers.authorization,undefined);
+  else {assert.equal(opts.headers.authorization,'Bearer test-token');assert.equal(opts.headers['x-tripo-device-id'],'test-device')}
+  calls.push(url);
+  const raw=Buffer.from(auth?(options.authBody??JSON.stringify({active:true,tokenized:'test-token'})):(options.proofBody??'{"code":0,"data":{}}'));
+  const tracked={raw,consumed:false};raws.push(tracked);
+  return {status:()=>auth?(options.authStatus??200):(options.proofStatus??200),
+   url:()=>auth?(options.authUrl??url):(options.proofUrl??url),headers:()=>options.headers??{},
+   body:async()=>{tracked.consumed=true;return raw},dispose:async()=>{disposed.push(url)}};
+ }},pages(){throw Error('Cookie renewal must not inspect or reload pages')}};
+ try {return {result:await new Capture(options.config).run(context),calls}}
+ finally {assert.equal(disposed.length,calls.length);for(const {raw,consumed} of raws) {
+  // A rejected status/URL never consumes a body. Every consumed body is wiped.
+  if(consumed)assert.ok(raw.every(x=>x===0));
+ }}
+}
+const good=await attempt();assert.equal(good.result.authorization,'Bearer test-token');
+assert.deepEqual(good.calls,[AUTH_URL,AUTH_VERIFICATION_URL]);
 for(const options of [
- {url:'https://api.tripo3d.ai.evil.test/v2/studio/user/profile/payment'},
- {url:'https://api.tripo3d.ai/v2/other'}, {url:'https://user@api.tripo3d.ai/v2/studio/user/profile/payment'},
- {requestUrl:'https://evil.test/redirect'}, {foreignFrame:true},{method:'POST'},
- {pageUrl:'https://evil.test/'},{initialMiss:true,navigationStatus:403},{title:'Just a moment'}, {signedOut:true},
- {status:401},{body:'{"code":1}'},{body:'invalid json'},{body:' '.repeat(1025)},
- {authorization:'Basic test-only'},{authorization:'Bearer '+ 'x'.repeat(16384)},
- {proofStatus:403},{proofUrl:AUTH_VERIFICATION_URL},{proofBody:'{"code":1}'},
- {proofBody:' '.repeat(1025)}
+ {authStatus:401},{authStatus:403},{authStatus:302},
+ {authUrl:'https://evil.test/'},{authBody:'invalid'}, {authBody:' '.repeat(1025)},
+ {authBody:'{"active":false,"tokenized":"test-token"}'},{authBody:'{"active":true}'},
+ {authBody:JSON.stringify({active:true,tokenized:'x'.repeat(16385)})},
+ {authBody:'{"active":true,"tokenized":"expired"}'},
+ {proofStatus:401},{proofStatus:403},{proofStatus:302},
+ {proofUrl:'https://evil.test/'},{proofBody:'{"code":1}'},{proofBody:'invalid'},
+ {proofBody:' '.repeat(1025)}, {headers:{'content-length':'999999'}},
+ {config:{studioOrigin:'https://evil.test'}},{config:{apiBaseUrl:'https://evil.test'}}
 ])await assert.rejects(()=>attempt(options));
 '''
         result = subprocess.run(['node', '--input-type=module', '-e', code], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is required for runtime patch tests')
-    def test_visible_browser_mode_preserves_automation_ownership_requirement(self):
+    def test_cookie_recovery_never_opens_a_login_surface_or_falls_back_to_password(self):
         pairs = dict(native_tripo.patches('global')['mcp/server.mjs'])
-        predicate = pairs['!args.includes("--headless=new") || normalizedPath('].split(' || normalizedPath(')[0]
         code = '''import assert from 'node:assert/strict';
-function rejected(args,mode){process.env.TRIPO_BROWSER_HEADLESS=mode;return ''' + predicate + '''}
-assert.equal(rejected(['--enable-automation'],'0'),false);
-assert.equal(rejected([],'0'),true);
-assert.equal(rejected(['--enable-automation','--headless=new'],'0'),true);
-assert.equal(rejected(['--headless=new'],'1'),false);
-assert.equal(rejected(['--enable-automation'],'1'),true);
+class TripoError extends Error {}
+class Recovery {
+checks=0;interrupts=0;authenticated=true;
+#provider={refresh:async()=>({authenticated:this.authenticated})};
+#assertPinnedConfiguration(){this.checks++}
+#throwIfAutomaticRecoveryInterrupted(){this.interrupts++}
+async #openAuthenticationSurface(){throw Error('Must not load Studio')}
+async run(recoveryGeneration){this.#assertPinnedConfiguration();
+''' + pairs['    const surface = await this.#openAuthenticationSurface(recoveryGeneration);'] + '''
+return surface;
+}}
+process.env.TRIPO_REUSE_BROWSER_SESSION='1';
+const r=new Recovery();assert.equal((await r.run(1)).method,'cookie');
+assert.equal(r.checks,1);assert.equal(r.interrupts,1);
+r.authenticated=false;await assert.rejects(()=>r.run(1),TripoError);
 '''
         subprocess.run(['node', '--input-type=module', '-e', code], check=True, capture_output=True)
 
