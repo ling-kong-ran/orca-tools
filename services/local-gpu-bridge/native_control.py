@@ -30,6 +30,7 @@ def inside(root,relative):
     if not file.resolve().is_relative_to(root.resolve()):raise ValueError('Path is outside the project.')
     return file
 PRIVATE_KEYS={'path_absolute','filepath','device','devices','gpu','gpus','cpu','cpus','vram','ram','hostname','computername','username','ip','ipv4','ipv6','public_ip','private_ip','address','mac','mac_address','network','networks','interfaces','adapters','hardware','hardware_info','hardware_model','device_name','adapter_name','environment','system_info','system','platform','os','version','driver','driver_version','serial','serial_number','log','logs','stdout','stderr'}
+PACKAGE_JSON_NAMES={'manifest.json','packages-lock.json','package.json','package-lock.json'}
 def private_text(value):
     value=re.sub(r'(?i)\b[A-Z]:[\\/][^\n\r\"\']*','[local path]',value)
     value=re.sub(r'(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])','[address]',value)
@@ -42,10 +43,11 @@ def private_text(value):
         if len(name)>=3:value=re.sub(r'(?i)(?<!\w)'+re.escape(name)+r'(?!\w)','[local identity]',value)
     value=re.sub(r'(?i)\b(?:NVIDIA\s+(?:GeForce\s+)?(?:RTX|GTX|Tesla|Quadro)[^\n\r\"\',;]*|AMD\s+Radeon[^\n\r\"\',;]*|Intel\s+(?:Arc|Core|Xeon)[^\n\r\"\',;]*)','[hardware]',value)
     return remote_json(value)
-def private_result(value):
+def private_result(value,keep_package_versions=False):
     # Results never include app logs, executable paths, system versions or arbitrary tool output.
-    if isinstance(value,dict):return remote_json({k:private_result(v) for k,v in value.items() if k.lower() not in PRIVATE_KEYS})
-    if isinstance(value,list):return [private_result(v) for v in value[:1000]]
+    denied=PRIVATE_KEYS-{'version'} if keep_package_versions else PRIVATE_KEYS
+    if isinstance(value,dict):return remote_json({k:private_result(v,keep_package_versions) for k,v in value.items() if k.lower() not in denied})
+    if isinstance(value,list):return [private_result(v,keep_package_versions) for v in value[:1000]]
     if isinstance(value,str):
         return private_text(value)[:16000]
     return value
@@ -200,7 +202,7 @@ class NativeControl:
         except UnicodeError:raise ValueError('Use artifact download for binary files.') from None
         # File transfer must not become a way to query local secrets or network records.
         if file.suffix.lower()=='.json':
-            try:text=json.dumps(private_result(json.loads(text)),ensure_ascii=False,indent=2)
+            try:text=json.dumps(private_result(json.loads(text),file.name in PACKAGE_JSON_NAMES),ensure_ascii=False,indent=2)
             except ValueError:pass
         return {'path':path,'sha256':digest(file),'text':private_text(text)}
     def project_download(self,project_id,path):
@@ -211,7 +213,7 @@ class NativeControl:
             try:text=file.read_text(encoding='utf-8-sig')
             except UnicodeError:raise ValueError('This text file cannot be privacy-filtered.') from None
             if file.suffix.lower()=='.json':
-                try:text=json.dumps(private_result(json.loads(text)),ensure_ascii=False,indent=2)
+                try:text=json.dumps(private_result(json.loads(text),file.name in PACKAGE_JSON_NAMES),ensure_ascii=False,indent=2)
                 except ValueError:pass
             data=private_text(text).encode('utf-8');folder=self.root/'filtered-downloads';folder.mkdir(exist_ok=True)
             target=folder/(hashlib.sha256(data).hexdigest()+file.suffix.lower())

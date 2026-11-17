@@ -16,6 +16,18 @@ class Tests(unittest.TestCase):
   return self.control.sync_plan({'project_id':'test','files':[{'path':path,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}]})
  def upload(self,data,offset=0,sha=None,total=None):
   return self.control.upload_chunk({'sha256':sha or hashlib.sha256(data).hexdigest(),'bytes':len(data) if total is None else total,'offset':offset,'data':base64.b64encode(data).decode()})
+ def test_package_file_read_and_download_preserve_dependency_versions(self):
+  folder=self.project/'unity/Packages';folder.mkdir(parents=True)
+  data={'dependencies':{'com.unity.pipeline':{'version':'0.9.1-exp.1','depth':0,'source':'registry'}},
+        'graphicsDeviceName':'private hardware','graphicsMemorySize':32768,
+        'driver':{'version':'private driver'},'email':'private@example.test'}
+  expected={'dependencies':data['dependencies']}
+  for name in ('manifest.json','packages-lock.json','package.json','package-lock.json'):
+   path='unity/Packages/'+name;(folder/name).write_text(json.dumps(data),encoding='utf-8')
+   self.assertEqual(json.loads(self.control.read_file('test',path)['text']),expected)
+   self.assertEqual(json.loads(self.control.project_download('test',path).read_text(encoding='utf-8')),expected)
+  (folder/'diagnostics.json').write_text(json.dumps({'version':'private system version'}),encoding='utf-8')
+  self.assertEqual(json.loads(self.control.read_file('test','unity/Packages/diagnostics.json')['text']),{})
  def test_paths_credentials_executables_and_reparse_denied(self):
   for name in ('../a','/a','C:/a','x\\a','.git/config','.env.production','a/.ssh/config','tools/x.ps1','client/evil.dll','client/con.png','folder/a:stream','server/saves/user.json'):
    with self.subTest(name=name),self.assertRaises(ValueError):self.plan(name,b'x')
