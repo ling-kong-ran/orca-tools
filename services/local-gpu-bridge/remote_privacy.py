@@ -24,7 +24,28 @@ PRIVATE = {
     'currency', 'currencycode',
     'credential', 'credentialstore', 'hostname', 'localaddress', 'account',
     'accountid', 'userid', 'host', 'endpoint', 'serverregion', 'regionname',
+    'gpu', 'gpus', 'gpuinfo', 'gpuname', 'gpumodel', 'gpuvendor', 'gpuvendorid',
+    'gpudeviceid', 'gpumemory', 'gpudriver', 'graphicsdevice', 'graphicsdevices',
+    'graphicsdevicename', 'graphicsdevicevendor', 'graphicsdevicevendorid',
+    'graphicsdeviceid', 'graphicsdeviceversion', 'graphicsdevicetype',
+    'graphicsmemorysize', 'graphicsdriver', 'graphicsdriverversion',
+    'graphicsadapter', 'graphicsadaptername', 'graphicscard', 'graphicscardname',
+    'graphicsinfo', 'videocard', 'videocardname', 'videocontroller',
+    'videoadapter', 'adaptername', 'vram', 'hardware', 'hardwaremodel',
+    'hardwarespecs', 'systeminfo',
 }
+# Apply at the shared HTTP boundary, including JSON encoded inside MCP text.
+# Device field names vary between Unity SystemInfo, CLI versions and diagnostics.
+HARDWARE_LABEL = re.compile(
+    r'(?im)^(\s*(?:graphics[ _-]*device[ _-]*(?:name|vendor(?:[ _-]*id)?|id|version|type)|'
+    r'graphics[ _-]*(?:memory[ _-]*size|driver(?:[ _-]*version)?)|'
+    r'gpu[ _-]*(?:name|model|vendor|memory|driver)|video[ _-]*(?:card|adapter|controller))'
+    r'\s*[:=]\s*)[^\r\n]*')
+HARDWARE_MODEL = re.compile(
+    r'(?i)\b(?:(?:NVIDIA\s+)?(?:GeForce\s+)?(?:RTX|GTX|Tesla|Quadro)\s+[A-Z0-9][A-Z0-9 .+()/-]*|'
+    r'(?:AMD\s+)?Radeon(?:\s+[A-Z0-9][A-Z0-9 .+()/-]*)?|'
+    r'Intel\s+(?:Arc|Iris|UHD|HD)\s+[A-Z0-9][A-Z0-9 .+()/-]*|'
+    r'NVIDIA\s+(?:[ABHVL]\d{2,3}|TITAN)\b[A-Z0-9 .+()/-]*)')
 ZONE_KEYS = {'timezone', 'timezoneid', 'localtimezone', 'systemtimezone', 'timezonename'}
 LOCAL_ZONE = re.compile(r'(?i)Asia/(?:Shanghai|Chongqing|Chungking|Harbin|Hong_Kong|Macao|Macau)|China Standard Time|中国标准时间|北京时间')
 PROVIDER = re.compile(r'(?i)\b(?:[a-z0-9-]+\.)*(?:bcebos\.com|tripo3d\.(?:com|ai))\b')
@@ -45,6 +66,8 @@ def utc_time(match):
 
 
 def remote_text(text, resources=False):
+    text = HARDWARE_LABEL.sub(r'\1[hardware]', text)
+    text = HARDWARE_MODEL.sub('[hardware]', text)
     text = re.sub(r'(?i)\b[A-Z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+\b', '[email]', text)
     text = re.sub(r'(?i)(https?://)[^/\s@]+@', r'\1[credentials]@', text)
     text = re.sub(r'(?i)([?&](?:token|access_token|api_key|secret|signature|password)=)[^&\s"<>]+', r'\1[redacted]', text)

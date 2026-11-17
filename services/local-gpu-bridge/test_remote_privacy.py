@@ -4,6 +4,38 @@ from remote_privacy import remote_json, remote_text
 
 
 class RemotePrivacyTests(unittest.TestCase):
+    def test_hardware_metadata_is_removed_from_nested_unity_replies(self):
+        private = {'graphicsDeviceName': 'NVIDIA GeForce RTX 2060',
+                   'graphics_device_vendor': 'NVIDIA', 'graphicsDeviceID': 123,
+                   'graphicsDeviceVendorID': 456, 'graphicsDeviceVersion': 'private driver',
+                   'graphicsMemorySize': 32768, 'GPU': {'name': 'private model'},
+                   'adapter_name': 'private adapter', 'systemInfo': {'renderer': 'private model'},
+                   'scene': 'Assets/Game.unity', 'width': 1920, 'compilationFailed': False}
+        result = remote_json({'structuredContent': private, 'content': [
+            {'type': 'text', 'text': json.dumps(private)}]})
+        expected = {'scene': 'Assets/Game.unity', 'width': 1920, 'compilationFailed': False}
+        self.assertEqual(result['structuredContent'], expected)
+        self.assertEqual(json.loads(result['content'][0]['text']), expected)
+        # Text downloads bypass send_json, so native file filtering must apply
+        # the same structured metadata policy before streaming the file.
+        from native_control import private_result, private_text
+        self.assertEqual(private_result(private), expected)
+        self.assertEqual(json.loads(private_text(json.dumps(private))), expected)
+
+    def test_hardware_models_and_diagnostic_lines_are_filtered(self):
+        for model in ('NVIDIA GeForce RTX 2060', 'RTX 2060', 'AMD Radeon RX 6600',
+                      'Intel Arc A770', 'NVIDIA A100'):
+            result = remote_text('Renderer: '+model+'\nerror CS1002: ; expected')
+            self.assertNotIn(model, result)
+            self.assertIn('error CS1002: ; expected', result)
+        result = remote_text('graphicsDeviceVendor: private-vendor\nGraphics Memory Size = 32768\nBuild complete')
+        self.assertNotIn('private-vendor', result)
+        self.assertNotIn('32768', result)
+        self.assertIn('Build complete', result)
+        safe = {'renderer': 'MeshRenderer', 'graphicsApi': 'Direct3D11', 'width': 1920,
+                'height': 1080, 'samples': 16, 'hardware_render': True}
+        self.assertEqual(remote_json(safe), safe)
+
     def test_schema_identifiers_survive_the_tripo_boundary(self):
         schema = {'$schema': 'http://json-schema.org/draft-07/schema#',
                   'type': 'object', 'properties': {'page': {'type': 'integer', 'minimum': 1}}}
