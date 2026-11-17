@@ -64,6 +64,9 @@ from job_reuse import latest_attempt, attempt_fields
 class NativeControl:
     def __init__(self,config,save_config=None,guard=None,process_factory=ManagedProcess):
         self.config=config;self.root=pathlib.Path(config['data_dir'])/'native';self.root.mkdir(parents=True,exist_ok=True)
+        media_settings=self.root/'media-tools.json'
+        if media_settings.is_file():
+            config.setdefault('native',{})['media_tools']=json.loads(media_settings.read_text(encoding='utf-8'))
         self.save_config=save_config;self.guard=guard or EgressGuard(config.get('native',{}));self.process_factory=process_factory
         self.lock=threading.RLock();self.execute_lock=threading.Lock();self.blender=None;self.blender_project=None
         self.jobs={};self.plans={}
@@ -87,6 +90,8 @@ class NativeControl:
             row={k:p[k] for k in ('id','name','enabled')}
             row['sync_policy']=p.get('sync_policy','local_review')
             row['allow_scripts']=p.get('allow_scripts',False)
+            if p['id'] in self.config.get('native',{}).get('media_tools',{}).get('project_ids',[]) and row['allow_scripts']:
+                row['media_tools']=['python','node','ffmpeg','ffprobe','chromium']
             row['git']={k:p.get('git',{}).get(k,d) for k,d in [('enabled',False),('remote','origin'),('branch','main'),('auto_pull_before_render',False)]}
             row['sync_method']='git' if row['git']['enabled'] else 'disabled'
             if local:
@@ -156,6 +161,7 @@ class NativeControl:
             try:
                 engines=[engine for engine in ('godot','blender','vroid','unity','unity-cli') if self.config.get('native',{}).get(engine.replace('-','_')+'_executable')]
                 if self.config.get('native',{}).get('go_executable'):engines.append('go')
+                engines+=['media-'+name for name in ('python','node','ffmpeg','ffprobe','chromium') if self.config.get('native',{}).get('media_tools',{}).get(name+'_executable')]
                 engines+=['server-'+key for key in self.config.get('native',{}).get('server_executables',{})]
                 if all(self.guard.ready(engine) for engine in engines):
                     self.privacy_setup={'status':'ready'};return
@@ -501,7 +507,7 @@ class NativeControl:
         names=job['result'].pop('artifacts',[])
         if job['result'].get('artifact'):names.append(job['result'].pop('artifact'))
         for name in names:
-            if not isinstance(name,str) or not re.fullmatch(job['id']+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|json|wav|fbx|abc)',name):raise ValueError('Invalid Blender artifact.')
+            if not isinstance(name,str) or not re.fullmatch(job['id']+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|webm|json|wav|ogg|fbx|abc)',name):raise ValueError('Invalid Blender artifact.')
             file=output_dir/name
             if not file.is_file() or file.is_symlink():raise ValueError('Rendered artifact missing')
             if file.suffix=='.json':
@@ -535,7 +541,7 @@ class NativeControl:
             if not ready or type(index)is not int or not 0<=index<len(job['artifacts']):raise ValueError('Artifact is not available.')
             self.project(job['project_id'])
             file=self.root/'artifacts'/job['artifacts'][index]['file']
-            if not re.fullmatch(ident+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|json|wav|fbx|abc)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')
+            if not re.fullmatch(ident+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|webm|json|wav|ogg|fbx|abc)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')
             return file
     def stop_blender(self):
         with self.lock:

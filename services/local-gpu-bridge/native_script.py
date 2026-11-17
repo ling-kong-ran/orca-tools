@@ -5,6 +5,36 @@ redirected to fixed Godot/Go/game-server operations owned by this job.
 """
 import hashlib,json,os,pathlib,re,shutil,subprocess,time
 
+MEDIA_NAMES={'python':'python','python3':'python','py':'python','node':'node','ffmpeg':'ffmpeg','ffprobe':'ffprobe'}
+
+def media_command(control,job,root,exe,args):
+    """Local opt-in only; interpreters run project files, never inline code/options."""
+    native=control.config['native'];settings=native.get('media_tools',{})
+    name=MEDIA_NAMES.get(exe.removesuffix('.exe'))
+    if name is None:return None
+    project=next((p for p in native.get('projects',[]) if p['id']==job['project_id']),{})
+    if not project.get('enabled') or not project.get('allow_scripts') or job['project_id'] not in settings.get('project_ids',[]):
+        raise ValueError('Media tools are not enabled for this project.')
+    from native_control import inside
+    if name in ('python','node'):
+        if not args or args[0].startswith('-'):raise ValueError('Select a project script; inline interpreter code is not exposed.')
+        path=pathlib.Path(args[0])
+        relative=path.relative_to(root).as_posix() if path.is_absolute() else path.as_posix()
+        path=inside(root,relative)
+        if not path.is_file() or path.suffix.lower() not in ({'.py'} if name=='python' else {'.js','.cjs','.mjs'}):
+            raise ValueError('Select an existing project Python or Node script.')
+        args=[str(path),*args[1:]]
+    # Descendants use the same dedicated executables and job, including Chromium.
+    for engine in ('python','node','ffmpeg','ffprobe','chromium'):
+        control.guard.require('media-'+engine)
+    folder=pathlib.Path(settings['root'])
+    env={'PATH':str(folder)+os.pathsep+str(pathlib.Path(os.environ.get('SystemRoot','C:/Windows'))/'System32'),
+         'PYTHONHOME':settings['python_home'],'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8',
+         'PLAYWRIGHT_BROWSERS_PATH':settings['browsers_path'],'CHROME':settings['chromium_executable'],
+         'FFMPEG':settings['ffmpeg_executable'],'TZ':'UTC',
+         'HTTP_PROXY':'','HTTPS_PROXY':'','ALL_PROXY':'','NODE_OPTIONS':'','NODE_PATH':'','PLAYWRIGHT_CORE':''}
+    return settings[name+'_executable'],args,env
+
 def go_build_environment(native):
     clean={k:v for k,v in os.environ.items() if not any(t in k.upper() for t in ('TOKEN','SECRET','KEY','CREDENTIAL','PASSWORD','ORCA_','CLAUDE_'))}
     clean.update({'CGO_ENABLED':'0','GOPROXY':'off','GOSUMDB':'off','GOTOOLCHAIN':'local','GOFLAGS':'','GOENV':'off','GOWORK':'off','GOROOT':native['go_root']})
@@ -48,7 +78,8 @@ func _bridge_call(kind: String, data: Dictionary) -> Dictionary:
 	f.close()
 	DirAccess.rename_absolute(request + ".tmp", request)
 	var response := folder.path_join(key + ".response.json")
-	var deadline := Time.get_ticks_msec() + 600000
+	var budget := maxi(600000, int(OS.get_environment("LOCAL_GPU_PROCESS_TIMEOUT_MS")))
+	var deadline := Time.get_ticks_msec() + budget
 	while not FileAccess.file_exists(response):
 		if Time.get_ticks_msec() > deadline:
 			return {"code": 1, "pid": -1, "running": false}
@@ -78,13 +109,15 @@ def adapt_script(text):
 class ProcessBroker:
     def __init__(self,control,job,root,folder):
         self.control=control;self.job=job;self.root=root;self.folder=folder;self.children={};self.serial=0;self.server_alias=None
+        self.pending={};self.media_failures=0
     def close(self):
         for child in self.children.values():
             if child.poll() is None:child.stop()
             child.close()
-    def start(self,exe,args,env=None):
+    def start(self,exe,args,env=None,process_limit=1):
         self.serial+=1
-        p=self.control.process_factory([str(exe),*args],self.root,self.folder/('child-'+str(self.serial)+'.log'),env)
+        options={} if process_limit==1 else {'process_limit':process_limit}
+        p=self.control.process_factory([str(exe),*args],self.root,self.folder/('child-'+str(self.serial)+'.log'),env,**options)
         self.children[self.serial]=p
         return self.serial
     def execute(self,exe,args):
@@ -109,7 +142,18 @@ class ProcessBroker:
         try:return {'code':self.children[pid].wait(timeout=300),'output':''}
         except subprocess.TimeoutExpired:self.children[pid].stop();return {'code':1,'output':''}
     def service(self):
+        from native_control import atomic,private_text
+        for pid,response in list(self.pending.items()):
+            child=self.children[pid];code=child.poll()
+            if code is None:continue
+            log=self.folder/('child-'+str(pid)+'.log')
+            with log.open('rb') as stream:
+                stream.seek(max(0,log.stat().st_size-32000));output=stream.read().decode('utf-8',errors='replace')
+            if code:self.media_failures+=1
+            atomic(response,{'code':code,'output':private_text(output)})
+            del self.pending[pid]
         for request in sorted(self.folder.glob('*.request.json')):
+            value={}
             try:
                 if request.stat().st_size>65536:raise ValueError('Process request exceeds limit.')
                 value=json.loads(request.read_text(encoding='utf-8'));kind=value['kind'];data=value['data']
@@ -121,7 +165,14 @@ class ProcessBroker:
                     else:result={'code':1}
                 else:
                     exe=data['executable'];argv=arguments(data['args'])
-                    if kind=='execute':result=self.execute(exe,argv)
+                    if kind=='execute':
+                        media=media_command(self.control,self.job,self.root,exe,argv)
+                        if media is not None:
+                            if len(self.pending)>=4:raise ValueError('At most four media processes may run per script task.')
+                            pid=self.start(*media,process_limit=64)
+                            self.pending[pid]=request.with_name(request.name.replace('.request.json','.response.json'))
+                            request.unlink();continue
+                        result=self.execute(exe,argv)
                     elif kind=='create':
                         native=self.control.config['native'];godot=pathlib.Path(native['godot_executable'])
                         if pathlib.Path(exe).resolve()==godot.resolve():self.control.guard.require('godot');managed=godot
@@ -131,6 +182,9 @@ class ProcessBroker:
                         result={'pid':self.start(managed,argv)}
                     else:raise ValueError('Process operation is not exposed.')
             except Exception:
+                if isinstance(value,dict) and value.get('kind')=='execute' and isinstance(value.get('data'),dict):
+                    failed_exe=value['data'].get('executable')
+                    if isinstance(failed_exe,str) and failed_exe.removesuffix('.exe') in MEDIA_NAMES:self.media_failures+=1
                 import logging;logging.exception('Gallery process request failed');result={'code':1,'pid':-1,'running':False,'output':'Managed process request failed. Inspect the local log.'}
             response=request.with_name(request.name.replace('.request.json','.response.json'))
             from native_control import atomic
@@ -147,7 +201,7 @@ def run_script(control,job,project,root,outputs):
         for relative in selected:
             path=inside(root,relative)
             for file in (path.rglob('*') if path.is_dir() else [path]):
-                if file.is_file() and file.suffix.lower() in {'.png','.jpg','.jpeg','.webp','.glb','.blend'}:
+                if file.is_file() and file.suffix.lower() in {'.png','.jpg','.jpeg','.webp','.glb','.blend','.mp4','.webm','.wav','.ogg'}:
                     inside(root,file.relative_to(root).as_posix());result.append(file)
                     if len(result)>1000:raise ValueError('Select fewer than 1000 output artifacts.')
         return sorted(set(result))
@@ -158,7 +212,7 @@ def run_script(control,job,project,root,outputs):
     cmd=[control.config['native']['godot_executable']]
     if args.get('headless',script.name=='shots.gd'):cmd.append('--headless')
     cmd+=['--path',str(path),'--audio-driver','Dummy','--position','-32000,-32000','--script',str(adapted),'--',*args.get('user_args',[])]
-    broker=ProcessBroker(control,job,root,queue);process=control.process_factory(cmd,root,folder/'application.log',{'LOCAL_GPU_PROCESS_QUEUE':str(queue)})
+    broker=ProcessBroker(control,job,root,queue);process=control.process_factory(cmd,root,folder/'application.log',{'LOCAL_GPU_PROCESS_QUEUE':str(queue),'LOCAL_GPU_PROCESS_TIMEOUT_MS':str(args.get('timeout_seconds',1800)*1000)})
     timed_out=False
     try:
         deadline=time.monotonic()+args.get('timeout_seconds',1800)
@@ -175,8 +229,9 @@ def run_script(control,job,project,root,outputs):
         if before.get(file)==(file.stat().st_mtime_ns,file.stat().st_size,digest(file)):continue
         index=len(artifacts);target=outputs/(job['id']+'-'+str(index)+file.suffix.lower());shutil.copyfile(file,target)
         artifacts.append({'index':index,'filename':file.relative_to(root).as_posix(),'file':target.name})
-    complete=not timed_out and exit_code==0
+    complete=not timed_out and exit_code==0 and not broker.media_failures and not broker.pending
     job['artifacts']=artifacts;job['result']={'script_completed':complete,'artifact_count':len(artifacts)}
+    if broker.media_failures:job['result']['media_process_failures']=broker.media_failures
     if not complete:
         failed=[]
         with (folder/'application.log').open('r',encoding='utf-8',errors='replace') as log:

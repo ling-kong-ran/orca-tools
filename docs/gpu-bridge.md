@@ -137,6 +137,28 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 
 若日志提示 `module lookup disabled by GOPROXY=off`，先检查受管构建的模块缓存是否与正常终端一致。GOENV=off 会隐藏通过 go env -w 保存的缓存位置，即使依赖已经下载，也可能查错目录。
 
+## 项目媒体剪辑工具
+
+Godot 的 `run_project_script` 可为本机批准的项目调用 Python、Node、FFmpeg 和 ffprobe；Python/Node 只接收项目内的脚本文件，不暴露 `-c`、`-e` 或任意 shell。Python 的后续编码和 Chromium 子进程随任务一起受管，超时会清理整个进程树。项目必须同时开启 `allow_scripts` 并列入本机 `media_tools.project_ids`。这仍是可信项目代码执行能力，不是文件系统沙箱。
+
+本机先安装 Python 3.10+（含 Pillow）、Node 18+、FFmpeg full（检查 `libx264`、`minterpolate`、`loudnorm`），再在项目的动态字卡目录执行 `npm install`。将 `PLAYWRIGHT_BROWSERS_PATH` 设为专用磁盘上的 `LocalGpuMedia/playwright` 后，执行 `npx playwright-core install chromium-headless-shell`。
+
+在本仓库运行安装脚本，`--chromium` 使用刚下载的实际路径：
+
+```powershell
+python scripts/install-media-tools.py --root E:/tools/LocalGpuMedia --project okgame --chromium E:/tools/LocalGpuMedia/playwright/<revision>/<platform>/chrome-headless-shell.exe --stage-config
+```
+
+安装器复制 Python、Node、FFmpeg、ffprobe 到专用目录，不修改正常程序；将配置写到 Bridge 数据目录的 `native/media-tools.json`。`--stage-config` 不重启正在运行的 Bridge，下次启动才加载。部署服务文件后执行 `Setup-Native-Privacy.ps1` 并完成管理员确认：只给专用副本和 Chromium 增加外网阻断规则，保留 loopback/Tailscale。所有五项隔离检查通过后才允许运行。
+
+VPS 仍使用已有的 `run_project_script`，例如：
+
+```json
+{"project_id":"okgame","script":"tools/mv_cut_gpu.gd","user_args":["podfall_trailer","--lang=en"],"headless":true,"timeout_seconds":7200,"output_paths":["docs/promo/redo"]}
+```
+
+返回任务 ID 后使用 `wait_native_job` 查询；完成后 `fetch_native_artifact` 下载产物。新增收集格式包括 MP4、WebM、WAV、OGG。媒体子进程失败会使任务失败，不能只看外层 Godot 的退出码。先验证短片，再顺序渲染长片；完整成片尚需按项目素材与脚本实测。
+
 ## VRoid Studio
 
 See [VRoid deployment and operations](vroid.md) for the optional managed Studio adapter. It shares this bridge and Toolkit entry; do not install a separate Orca plugin.

@@ -14,6 +14,7 @@ class EgressGuard:
     def ready(self,engine):
         if os.name!='nt':return False
         value=self.config.get('server_executables',{}).get(engine[7:]) if engine.startswith('server-') else self.config.get(engine.replace('-','_')+'_executable')
+        if engine.startswith('media-'):value=self.config.get('media_tools',{}).get(engine[6:]+'_executable')
         if not value:return False
         exe=pathlib.Path(value)
         if not engine.startswith('server-') and not exe.is_file():return False
