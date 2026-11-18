@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),os=require('node:os'),http=require('node:http');
 const {createGpuRecovery}=require('./gpu-health.cjs');
+const {createDownloadKeepAlive}=require('./download-health.cjs');
 const root=path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'OrcaLocalTools');
 fs.mkdirSync(root,{recursive:true});
 const lock=path.join(root,'bootstrap.pid');
@@ -10,7 +11,7 @@ process.on('exit',()=>{try{if(fs.readFileSync(lock,'utf8')===String(process.pid)
 const reviewed={
  'local-tools.toolkit':{command:'toolkit.open',port:18774}
 };
-let client,recoverGpu,lastState='',activated=new Set();
+let client,recoverGpu,keepDownloads,lastState='',activated=new Set();
 function log(state){const text=JSON.stringify(state);if(text===lastState)return;lastState=text;fs.appendFileSync(path.join(root,'startup.log'),new Date().toISOString()+' '+text+'\n');}
 function healthy(port){return new Promise(resolve=>{const request=http.get('http://127.0.0.1:'+port+'/',{timeout:1500},response=>{response.resume();resolve(response.statusCode===200);});request.on('error',()=>resolve(false));request.on('timeout',()=>{request.destroy();resolve(false);});});}
 async function tick(){
@@ -18,7 +19,10 @@ async function tick(){
  const script="$p=Get-CimInstance Win32_Process -Filter \"Name='Orca.exe'\" -ErrorAction SilentlyContinue; if(@($p | Where-Object {$_.ExecutablePath -eq '"+exe.replaceAll("'","''")+"'}).Count -gt 0){exit 0}else{exit 1}";
  const app=cp.spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,stdio:'ignore'});
  if(app.status!==0){activated.clear();return;}
- if(!client){const {RuntimeClient}=require(path.join(path.dirname(exe),'resources','app.asar.unpacked','out','cli','runtime-client.js'));client=new RuntimeClient(undefined,10000);recoverGpu=createGpuRecovery({local:path.dirname(root),client});}
+ if(!client){const cliRoot=path.join(path.dirname(exe),'resources','app.asar.unpacked','out','cli');
+  const sdk=[path.join(cliRoot,'runtime','client.js'),path.join(cliRoot,'runtime-client.js')].find(file=>fs.existsSync(file));
+  if(!sdk)throw Error('Orca runtime client is unavailable');
+  const {RuntimeClient}=require(sdk);client=new RuntimeClient(undefined,10000,null,null);recoverGpu=createGpuRecovery({local:path.dirname(root),client});keepDownloads=createDownloadKeepAlive({client});}
  const response=await client.call('plugins.list',{});if(!response.ok)throw Error('Orca plugin service is unavailable');
  const runtime=response._meta?.runtimeId||'local';const states=[];
  for(const [key,review] of Object.entries(reviewed)){
@@ -32,6 +36,7 @@ async function tick(){
    if(!started.ok)throw Error('Orca could not activate '+key);
    activated.add(mark);
   }
+  await keepDownloads(plugin);
   const gpu=await recoverGpu(plugin);states.push({key,status:'activated',gpu:gpu.status,...gpu.tripo?{tripo:gpu.tripo}:{}});
  }
  log({plugins:states});

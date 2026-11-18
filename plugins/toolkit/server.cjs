@@ -83,6 +83,6 @@ async function startServer(options){
   }catch(e){if(!res.headersSent)send(400,{error:String(e.message).slice(0,500)});else res.destroy();}
  });
  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(options.port??18774,'127.0.0.1',resolve);});}catch(e){await controller.close();throw e;}
- port=server.address().port;return {url:`http://127.0.0.1:${port}/`,controller,async close(){picker.close?.();await deployment.close();await controller.close();await new Promise(resolve=>server.close(resolve));}};
+ port=server.address().port;controller.downloads?.resumeInterrupted?.();return {url:`http://127.0.0.1:${port}/`,controller,async close(){picker.close?.();await deployment.close();await controller.close();await new Promise(resolve=>server.close(resolve));}};
 }
 module.exports={startServer};

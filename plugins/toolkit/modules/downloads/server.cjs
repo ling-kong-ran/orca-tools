@@ -40,6 +40,7 @@ async function startServer(options) {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(options.port??18770,'127.0.0.1',resolve);});
   port=server.address().port;
+  manager.resumeInterrupted();
   return {manager,server,url:`http://127.0.0.1:${port}/`,async close(){await manager.close();await new Promise(resolve=>server.close(resolve));}};
 }
 module.exports={startServer};

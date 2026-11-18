@@ -6,4 +6,6 @@ Windows 登录助手，每 15 秒等待 Orca 并激活已审核启用的 Toolkit
 
 安装：`node install.cjs`。首次立即启动：`node "%LOCALAPPDATA%/OrcaLocalTools/bootstrap.cjs"`（CMD；PowerShell 使用 `$env:LOCALAPPDATA`）。
 
+下载活动保活：通过已认证的回环管理 API 检查准备、下载和校验状态，每分钟最多调用一次 `toolkit.open(openBrowser=false)`。这使下载活动被 Orca 插件宿主识别，避免 5 分钟空闲回收；不打开网页，不自动恢复用户暂停的任务，也不批准或启用已禁用的插件。部署时应一并复制 `download-health.cjs`。兼容新旧 Orca 的 RuntimeClient 文件位置。
+
 完整说明、运行数据与升级步骤见 [operations.md](../../docs/operations.md)。

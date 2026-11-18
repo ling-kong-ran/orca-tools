@@ -39,6 +39,7 @@ class Controller {
     }
     if(jobs.some(j=>!['complete','cancelled'].includes(j.status)||j.cleanupWarning))throw Error('Finish or cancel pending downloads and clear temporary access before changing the remote target.');
    }
+   if(changed)await this.downloads?.pauseAll();
    this.settings=settings.save(this.root,next);this.settingsError='';if(changed)await this.configureDownloads();
   })();
   try{await this.loading;}finally{this.loading=null;}

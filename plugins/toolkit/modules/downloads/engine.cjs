@@ -49,7 +49,9 @@ class DownloadManager {
       if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
       try {
         const job = JSON.parse(fs.readFileSync(path.join(this.root, 'jobs', name), 'utf8'));
-        if (!['complete','cancelled'].includes(job.status)) job.status = 'paused';
+        const interrupted=['preparing','downloading','verifying'].includes(job.status);
+        job.resumeOnStart=(interrupted&&job.resumeOnStart!==false)||(job.status==='paused'&&job.resumeOnStart===true);
+        if (!['complete','cancelled','error'].includes(job.status)) job.status = 'paused';
         this.jobs.set(job.id, job);
       } catch {}
     }
@@ -84,10 +86,13 @@ class DownloadManager {
     this.start(job); return this.list().find(j=>j.id===id);
   }
   start(job) {
+    if(this.closed)throw Error('Download manager is closing');
     if (this.runs.has(job.id)) throw Error('This download is already running');
+    job.resumeOnStart=true;this.save(job);
     const controller=new AbortController();
     const promise=this.run(job,controller.signal).catch(error=>{
-      job.status=controller.signal.aborted?'paused':'error';job.error=controller.signal.aborted?null:String(error.message).slice(0,500);this.save(job);
+      job.status=controller.signal.aborted?'paused':'error';if(!controller.signal.aborted)job.resumeOnStart=false;
+      job.error=controller.signal.aborted?null:String(error.message).slice(0,500);this.save(job);
     }).finally(()=>{this.live.delete(job.id);this.runs.delete(job.id);});
     this.runs.set(job.id,{controller,promise});
   }
@@ -139,13 +144,14 @@ class DownloadManager {
       if(!['EPERM','ENOTSUP','EACCES'].includes(error.code))throw error;
       fs.copyFileSync(job.partial,job.destination,fs.constants.COPYFILE_EXCL);
     }
-    fs.unlinkSync(job.partial);job.verified=true;job.status='complete';this.save(job);
+    fs.unlinkSync(job.partial);job.verified=true;job.status='complete';job.resumeOnStart=false;this.save(job);
     try{await this.transport.cleanup(job);}catch{job.cleanupWarning='Transfer access cleanup pending; use Clear access.';this.save(job);}
     await this.options.onComplete?.(job).catch(()=>{});
   }
   async action(id,action) {
     const job=this.jobs.get(id);if(!job)throw Error('Download not found');
     if(action==='pause'){
+      job.resumeOnStart=false;this.save(job);
       const run=this.runs.get(id);if(run){run.controller.abort();await run.promise;}
     }else if(action==='resume'){
       if(!['paused','error'].includes(job.status))throw Error('This download cannot be resumed');
@@ -163,7 +169,15 @@ class DownloadManager {
     }else throw Error('Unknown action');
     return this.list().find(j=>j.id===id);
   }
-  async pauseAll(){await Promise.all([...this.runs.keys()].map(id=>this.action(id,'pause')));}
-  async close(){this.closed=true;await this.pauseAll();}
+  resumeInterrupted(){
+    if(this.closed)return;
+    for(const job of this.jobs.values())if(job.status==='paused'&&job.resumeOnStart===true&&!this.runs.has(job.id))this.start(job);
+  }
+  async pauseAll(){await Promise.all([...this.jobs.values()].filter(j=>this.runs.has(j.id)||j.resumeOnStart).map(j=>this.action(j.id,'pause')));}
+  async close(){
+    this.closed=true;
+    // Service shutdown is not a user's Pause command. Retain resume intent.
+    await Promise.all([...this.runs.values()].map(run=>{run.controller.abort();return run.promise;}));
+  }
 }
 module.exports={DownloadManager,Semaphore,safeName,chunkSize};

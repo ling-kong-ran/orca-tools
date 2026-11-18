@@ -73,6 +73,48 @@ test('a file appearing at the destination is never overwritten',async()=>{
   const done=await settled(f.manager,j.id);assert.equal(done.status,'error');assert.equal(fs.readFileSync(j.destination,'utf8'),'KEEP');assert.ok(fs.existsSync(done.partial));
  }finally{await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
 });
+
+test('worker shutdown resumes only unfinished ranges after the server owns its port',async()=>{
+ const f=fixture(20*1024*1024);f.fake.delay=2;let restored;
+ try{
+  const j=await f.manager.create({source:'/remote/restart.bin',folder:f.folder,concurrency:2});
+  while(f.manager.jobs.get(j.id).done.length<1)await sleep(10);
+  await f.manager.close();const before=[...f.manager.jobs.get(j.id).done];
+  assert.equal(f.manager.jobs.get(j.id).resumeOnStart,true);
+  restored=new DownloadManager(f.options);assert.equal(restored.runs.size,0);
+  const offset=f.fake.reads.length;restored.resumeInterrupted();restored.resumeInterrupted();
+  const job=await settled(restored,j.id);assert.equal(job.status,'complete');assert.equal(job.resumeOnStart,false);
+  assert.deepEqual(fs.readFileSync(job.destination),f.source);
+  for(const i of before)assert.ok(!f.fake.reads.slice(offset).includes(i*job.chunk));
+ }finally{await restored?.close();await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('manual pause including pause-all after restart never auto resumes',async()=>{
+ const f=fixture(4*1024*1024);f.fake.delay=2;let restored;
+ try{
+  const j=await f.manager.create({source:'/remote/manual.bin',folder:f.folder,concurrency:1});
+  await sleep(20);await f.manager.close();restored=new DownloadManager(f.options);
+  await restored.pauseAll();restored.resumeInterrupted();assert.equal(restored.runs.size,0);
+  assert.equal(restored.jobs.get(j.id).resumeOnStart,false);await restored.close();
+  restored=new DownloadManager(f.options);restored.resumeInterrupted();assert.equal(restored.runs.size,0);
+  await restored.action(j.id,'resume');await sleep(10);await restored.action(j.id,'pause');await restored.close();
+  restored=new DownloadManager(f.options);restored.resumeInterrupted();assert.equal(restored.runs.size,0);
+ }finally{await restored?.close();await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
+});
+
+test('startup recovers a crashed transfer but not errors, cancelled or legacy paused jobs',async()=>{
+ const f=fixture(4096);let restored;
+ try{
+  for(const [i,status] of ['downloading','error','cancelled','paused','complete'].entries()){
+   const id=String(i).repeat(32),meta=await f.fake.prepare(),partial=path.join(f.root,id+'.part');fs.writeFileSync(partial,Buffer.alloc(meta.size));
+   fs.writeFileSync(path.join(f.options.dataDir,'jobs',id+'.json'),JSON.stringify({id,status,partial,destination:path.join(f.folder,id),source:'/remote/test.bin',done:[],size:meta.size,sha256:meta.sha256,chunk:4096,concurrency:1}));
+  }
+  fs.mkdirSync(f.folder,{recursive:true});restored=new DownloadManager(f.options);restored.resumeInterrupted();
+  assert.equal((await settled(restored,'0'.repeat(32))).status,'complete');
+  for(const [i,status] of ['error','cancelled','paused','complete'].entries())assert.equal(restored.jobs.get(String(i+1).repeat(32)).status,status);
+  assert.equal(f.fake.reads.length,1);
+ }finally{await restored?.close();await f.manager.close();fs.rmSync(f.root,{recursive:true,force:true});}
+});
 test('empty files complete and Windows reserved names are sanitized',async()=>{
  const f=fixture(0);
  try{const j=await f.manager.create({source:'/remote/empty.bin',folder:f.folder});assert.equal((await settled(f.manager,j.id)).status,'complete');assert.equal(fs.statSync(j.destination).size,0);

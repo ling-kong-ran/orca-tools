@@ -3,7 +3,7 @@
   "id": "toolkit",
   "publisher": "local-tools",
   "name": "Orca Toolkit",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Unified accounts, downloads, GPU tools and a local Claude/VPS deployment center.",
   "engines": {
     "orca": ">=1.4.237"

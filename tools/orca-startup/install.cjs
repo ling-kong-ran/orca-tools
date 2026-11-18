@@ -7,6 +7,7 @@ if(fs.existsSync(path.join(root,'bootstrap.pid')))throw Error('Existing helper f
 fs.mkdirSync(root,{recursive:true});
 fs.copyFileSync(path.join(__dirname,'bootstrap.cjs'),path.join(root,'bootstrap.cjs'));
 fs.copyFileSync(path.join(__dirname,'gpu-health.cjs'),path.join(root,'gpu-health.cjs'));
+fs.copyFileSync(path.join(__dirname,'download-health.cjs'),path.join(root,'download-health.cjs'));
 const folder=path.join(process.env.APPDATA,'Microsoft','Windows','Start Menu','Programs','Startup');
 fs.mkdirSync(folder,{recursive:true});
 const command='"'+process.execPath+'" "'+path.join(root,'bootstrap.cjs')+'"';
