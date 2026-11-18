@@ -7,6 +7,7 @@ import re
 import subprocess
 import threading
 import uuid
+import urllib.request
 from collections import Counter
 from contextlib import contextmanager
 from native_unity_commands import TOOLS as QUALIFIED_TOOLS, BY_NAME, invoke
@@ -96,6 +97,7 @@ class UnityControl:
         self.next_id = 0
         self.lock = threading.RLock()
         self.write_lock = threading.Lock()
+        self.recovery_requests = {}
 
     def settings(self): return self.native.config.get('native', {})
 
@@ -129,6 +131,69 @@ class UnityControl:
             'connected': bool(self.editor and self.editor.poll() is None and self.pipeline_ready
                               and self.rpc_process and self.rpc_process.poll() is None)}
 
+    def editor_state(self, project_id):
+        """Background Pipeline health, independent of a blocked MCP/main-thread call."""
+        _, root = self.project(project_id)
+        if not self.editor or self.editor.poll() is not None or self.editor_project != project_id:
+            return {'running':False,'ready':False,'state':'not_running'}
+        result={'running':True,'ready':False,'state':'unreachable','automated':None,
+                'dialog_detection':'pipeline_only'}
+        try:
+            descriptor=startup_path(root,'Library/Pipeline/.unity-pipeline-port')
+            if descriptor.stat().st_size>65536: return result
+            data=json.loads(descriptor.read_text(encoding='utf-8'))
+            # A stale/foreign descriptor must never redirect a credential-bearing probe.
+            if data.get('pid')!=self.editor.process.pid or pathlib.Path(data.get('projectPath','')).resolve()!=root.resolve():
+                return result
+            port=data.get('port');token=data.get('evalToken')
+            if type(port)is not int or not 1<=port<=65535 or not isinstance(token,str) or not token or len(token)>4096:
+                return result
+            result['automated']=data.get('mode')=='batchmode' or not bool(data.get('info'))
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self,*args,**kwargs):return None
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+            req=urllib.request.Request('http://127.0.0.1:'+str(port)+'/api/status',headers={'Authorization':'Bearer '+token})
+            with opener.open(req,timeout=3) as response:
+                raw=response.read(65537)
+            if len(raw)>65536:return result
+            value=json.loads(raw)
+            state=value.get('status')
+            if state not in ('ready','settling','blocked_by_dialog','compiling','reloading','error'):state='unavailable'
+            result.update(state=state,ready=state=='ready')
+            if isinstance(value.get('dialog'),dict):
+                from native_control import private_result
+                result['dialog']=private_result({k:value['dialog'][k] for k in ('title','message','buttons') if k in value['dialog']})
+            # Older Editors and OS file pickers are outside Pipeline's dialog coverage.
+            if result['automated'] is False:
+                result['next']='Restart with unity_recover(discard_changes=true) after saving any wanted edits to enable automated mode. Pipeline may miss native dialogs.'
+            elif state=='blocked_by_dialog':
+                result['next']='Inspect the dialog; unity_recover(discard_changes=true) restarts only this managed Editor. It does not click dialogs or retry edits.'
+        except (OSError,ValueError,AttributeError):pass
+        return result
+
+    def recover(self, project_id, discard_changes=False, request_id=None):
+        if discard_changes is not True:
+            raise ValueError('Recovery discards unsaved Unity changes. Save first or explicitly set discard_changes=true.')
+        if not isinstance(request_id,str) or not re.fullmatch('[a-f0-9]{32}',request_id):
+            raise ValueError('Provide a 32-character request_id; reuse it after uncertain recovery responses.')
+        self.project(project_id)
+        if not self.lock.acquire(timeout=2):
+            raise ValueError('A Unity request is still in flight. Wait for it to finish or time out, then retry recovery; no editor was stopped.')
+        try:
+            previous=self.recovery_requests.get(request_id)
+            if previous:
+                if previous['project_id']!=project_id:raise ValueError('Recovery request_id belongs to a different project.')
+                if previous.get('error'):raise ValueError('This recovery attempt failed; inspect state before using a new request_id.')
+                return {**previous,'already_requested':True}
+            if self.editor_project not in (None,project_id):raise ValueError('This is not the managed Unity project.')
+            self.native.guard.require('unity');self.native.guard.require('unity-cli')
+            self.recovery_requests[request_id]={'project_id':project_id,'error':True}
+            self.stop(project_id)
+            result={**self.start(project_id),'restarted':True,'automated':True,'edits_retried':False}
+            self.recovery_requests[request_id]=result
+            return result
+        finally:self.lock.release()
+
     def start(self, project_id):
         with self.lock:
             project, root = self.project(project_id)
@@ -147,10 +212,10 @@ class UnityControl:
             recovered = preserve_scene_backups(root)
             # Unity needs shader/compiler/package-manager children. The parent and
             # children are killed together when this bounded Windows job closes.
-            args = [self.settings()['unity_executable'], '-projectPath', str(root), '-logFile', str(log), '-force-d3d11', '-job-worker-count', '4']
+            args = [self.settings()['unity_executable'], '-projectPath', str(root), '-automated', '-logFile', str(log), '-force-d3d11', '-job-worker-count', '4']
             self.editor = self.native.process_factory(args, root, log, self.environment(), show_window=True, process_limit=128)
             self.editor_project = project_id
-            return {'started':True,'project_id':project_id,'ready':False,
+            return {'started':True,'project_id':project_id,'ready':False,'automated':True,
                 'recovered_scenes':recovered,
                 'next':'Wait for project import, then call unity_tools. No desktop screenshot fallback is enabled.'}
 
@@ -232,6 +297,8 @@ class UnityControl:
         if not isinstance(name,str) or DENIED.search(name) or name in DENIED_NAMES: raise ValueError('This Unity tool is not exposed.')
         arguments = {} if arguments is None else arguments
         if not isinstance(arguments,dict) or len(json.dumps(arguments))>65536: raise ValueError('Unity arguments must be an object under 64 KB.')
+        if self.editor_state(project_id).get('state')=='blocked_by_dialog':
+            raise ValueError('Unity is blocked by a dialog. Read unity_editor_state; save wanted changes before unity_recover(discard_changes=true). The edit was not submitted.')
         with self.lock:
             exposed = {tool['name'] for tool in self.tools(project_id)['tools']}
             if name not in exposed: raise ValueError('Read unity_tools and use an exposed tool name.')

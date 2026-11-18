@@ -115,7 +115,9 @@ TRIPO_FILE_TOOLS = [
 TRIPO_FILE_NAMES = {t['name'] for t in TRIPO_FILE_TOOLS}
 
 UNITY_TOOLS = NATIVE_COMMON + [
-    tool('unity_start','Start the managed Unity Editor for an approved local project. Pulls Git first if configured. Import may take time; use unity_tools afterwards. No desktop screenshot fallback.',{'project_id':STR},['project_id'],False),
+    tool('unity_start','Start the managed Unity Editor in automated mode (-automated), keeping graphics enabled. Pulls Git first if configured. Import may take time; use unity_editor_state and unity_tools afterwards. Already-open editors need unity_recover to change startup mode. No desktop screenshot fallback.',{'project_id':STR},['project_id'],False),
+    tool('unity_editor_state','Read managed Unity automation mode and Pipeline health without waiting on the Editor main thread. Reports covered blocking dialogs with filtered text. Detection is Pipeline-only: older Editors, OS file pickers and third-party dialogs may be missed even when ready=true. No tokens, ports, hardware or local paths are returned.',{'project_id':STR},['project_id']),
+    tool('unity_recover','Restart ONLY the approved managed Unity Editor in automated mode when blocked. Requires discard_changes=true: unsaved edits are lost; save wanted changes first. Does not restart GPU Bridge or Blender and never retries the interrupted edit. Returns immediately after launch; poll unity_editor_state then unity_tools. Do not repeatedly restart a compiling/importing Editor. Reuse request_id after an uncertain response within the same Bridge session; after a Bridge restart inspect state first.',{'project_id':STR,'discard_changes':{'type':'boolean'},'request_id':{'type':'string','pattern':'^[a-f0-9]{32}$'}},['project_id','discard_changes'],False),
     tool('unity_stop','Stop only the managed Unity Editor for this project. Save scene changes through an exposed Editor tool first.',{'project_id':STR},['project_id'],False),
     tool('unity_tools','List the official Unity Pipeline tools exposed by this managed project. Shell, arbitrary C# eval, account and system tools are excluded.',{'project_id':STR},['project_id']),
     tool('unity_call','Invoke a tool name and arguments obtained from unity_tools. Scenes, objects, assets, Play mode and viewport capture depend on the installed Pipeline catalog. No generic shell; no automatic retry of edits.',{'project_id':STR,'name':STR,'arguments':{'type':'object'}},['project_id','name'],False),
@@ -252,6 +254,11 @@ class Client:
             return download_receipt(target, size, digest.hexdigest())
         finally: partial.unlink(missing_ok=True)
     def call(self, name, args):
+        if name=='unity_editor_state':return self.request('/v1/unity/editor-state',args)
+        if name=='unity_recover':
+            body=dict(args);body.setdefault('request_id',uuid.uuid4().hex)
+            try:return self.request('/v1/unity/recover',body)
+            except ValueError as e:raise ValueError(str(e)+' request_id='+body['request_id']) from None
         if name in ('unity_start','unity_stop','unity_tools','unity_call'):
             return self.request('/v1/unity/'+name[6:],args)
         if name=='tripo_upload':return self.tripo_upload(args)
@@ -388,7 +395,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.10.0'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.10.1'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}

@@ -49,6 +49,14 @@ Update the installed `local-gpu` Claude plugin to 1.8.0 and run `/reload-plugins
 | `unity_stop` | Stop that managed Editor; save first |
 | `unity_tools` | Discover current Pipeline tool names and schemas |
 | `unity_call` | Invoke one discovered tool with its typed arguments |
+| `unity_editor_state` | Read automation mode and background Pipeline health, with filtered blocking-dialog details |
+| `unity_recover` | Restart only the managed Unity Editor; requires `discard_changes=true`, never replays edits |
+
+Version 1.10.1 starts the graphics-enabled Editor with Unity's `-automated` flag. The installed Pipeline warns that an interactive Editor without this flag can stall on modal dialogs; CLI `--non-interactive` alone does not change an already-running Editor. This fixes the startup mode centrally instead of adding a click handler for each dialog. It does not guarantee coverage of arbitrary third-party modals or OS file pickers.
+
+For a stalled session, call `unity_editor_state` with `project_id`. The probe uses the project's Pipeline descriptor, verifies that its PID and project match the managed Editor, calls only authenticated loopback `/api/status`, and exposes no descriptor/token/port/host metadata. It does not wait on the MCP request lock. `dialog_detection=pipeline_only` means `ready=true` is not proof that every possible native dialog is absent, particularly on older Editors. Known `blocked_by_dialog` states refuse new edits before submitting them.
+
+After saving any changes you want to retain, call `unity_recover` with `project_id` and `discard_changes=true`. It closes and reopens only that managed Unity Editor in automated mode, leaving Blender and GPU Bridge running. Import remains asynchronous: poll state, then discover tools. Reuse `request_id` after an uncertain response within the same Bridge session; after a Bridge restart, inspect state first. An in-flight request must finish or time out before recovery. Recovery is never automatic on timeout and never repeats the interrupted edit. Existing editors gain automated mode only on their next launch.
 
 Startup preserves stale scene backups automatically: while holding the project's Unity lock, the bridge moves `Temp/__Backupscenes` into a unique `Assets/_Recovery/bridge-<random-id>/` directory and gives non-conflicting `.backup` scenes the `.unity` extension. Existing recovery files are never overwritten. An already locked project or a linked recovery path is refused. This prevents the pre-import **Recovering Scene Backups** dialog from blocking Pipeline after a forced stop; it does not automatically accept license or project-upgrade prompts.
 

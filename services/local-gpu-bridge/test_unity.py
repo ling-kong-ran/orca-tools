@@ -10,7 +10,7 @@ from native_unity import UnityControl, DENIED, preserve_scene_backups, startup_l
 
 
 class FakeEditor:
-    def __init__(self): self.alive=True
+    def __init__(self): self.alive=True;self.process=types.SimpleNamespace(pid=12345)
     def poll(self): return None if self.alive else 0
     def stop(self): self.alive=False
     def close(self): self.alive=False
@@ -34,10 +34,56 @@ class UnityTests(unittest.TestCase):
         result=self.control.start('approved')
         self.assertTrue(result['started']);args,kwargs=self.calls[0]
         self.assertEqual(args[0][args[0].index('-projectPath')+1],str(self.root))
+        self.assertIn('-automated',args[0]);self.assertTrue(result['automated'])
         self.assertNotIn('-nographics',args[0]);self.assertEqual(kwargs['process_limit'],128)
         self.assertTrue(self.control.start('approved')['already_running'])
         with self.assertRaises(ValueError):self.control.start('different')
         self.control.stop('approved');self.assertFalse(self.control.status()['connected'])
+
+    def test_recover_requires_explicit_discard_and_never_repeats_a_request(self):
+        self.control.start('approved');old=self.control.editor
+        for discard in (False,None,1,'true'):
+            with self.assertRaises(ValueError):self.control.recover('approved',discard,'a'*32)
+        self.assertTrue(old.alive)
+        with self.assertRaises(ValueError):self.control.recover('other',True,'a'*32)
+        self.assertTrue(old.alive)
+        result=self.control.recover('approved',True,'a'*32)
+        self.assertTrue(result['automated']);self.assertFalse(old.alive);self.assertFalse(result['edits_retried'])
+        current=self.control.editor
+        self.assertTrue(self.control.recover('approved',True,'a'*32)['already_requested'])
+        self.assertIs(self.control.editor,current);self.assertEqual(len(self.calls),2)
+
+    def test_editor_state_pins_identity_and_filters_pipeline_details(self):
+        import io
+        self.control.start('approved')
+        file=self.root/'Library/Pipeline/.unity-pipeline-port';file.parent.mkdir(parents=True)
+        descriptor={'pid':12345,'projectPath':str(self.root),'port':1234,'evalToken':'private-token','info':'not automated'}
+        file.write_text(json.dumps(descriptor))
+        class Opener:
+            def open(s,req,timeout):
+                self.assertEqual(req.full_url,'http://127.0.0.1:1234/api/status')
+                self.assertEqual(req.get_header('Authorization'),'Bearer private-token')
+                return io.BytesIO(json.dumps({'status':'blocked_by_dialog','gpu':'private hardware','dialog':{'title':'Save?','message':'private@example.test','buttons':['Save',"Don\u0027t Save"],'secret':'private'}}).encode())
+        with patch('native_unity.urllib.request.build_opener',return_value=Opener()) as request:
+            result=self.control.editor_state('approved')
+            self.assertFalse(result['ready']);self.assertFalse(result['automated'])
+            self.assertEqual(result['state'],'blocked_by_dialog')
+            for secret in ('private-token','private@example.test','private hardware',str(self.root)):
+                self.assertNotIn(secret,json.dumps(result))
+            descriptor['pid']=999;file.write_text(json.dumps(descriptor));request.reset_mock()
+            self.assertEqual(self.control.editor_state('approved')['state'],'unreachable')
+            request.assert_not_called()
+
+    def test_editor_state_does_not_need_the_mcp_lock(self):
+        self.assertEqual(self.control.editor_state('approved')['state'],'not_running')
+        self.control.start('approved')
+        self.assertEqual(self.control.editor_state('approved')['state'],'unreachable')
+
+    def test_dialog_gate_does_not_submit_or_retry_an_edit(self):
+        with patch.object(self.control,'editor_state',return_value={'state':'blocked_by_dialog'}),patch.object(self.control,'_send') as send:
+            with self.assertRaisesRegex(ValueError,'not submitted'):
+                self.control.call('approved','save',{})
+            send.assert_not_called()
 
     def test_network_guard_and_real_project_required(self):
         self.guard.require=lambda engine:(_ for _ in ()).throw(ValueError('not isolated'))

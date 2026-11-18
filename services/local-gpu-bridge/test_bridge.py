@@ -19,6 +19,14 @@ class FakeAdapter:
     def upload(self,name,content):return {'reference':'local-gpu-bridge/'+name,'bytes':len(content)}
 
 class Tests(unittest.TestCase):
+    def test_unity_recovery_and_state_use_fixed_authenticated_routes(self):
+        with unittest.mock.patch.object(self.bridge.native.unity,'editor_state',return_value={'state':'blocked_by_dialog','automated':False}) as state:
+            self.assertEqual(self.client.call('unity_editor_state',{'project_id':'test'})['state'],'blocked_by_dialog')
+            state.assert_called_once_with(project_id='test')
+        args={'project_id':'test','discard_changes':True,'request_id':'c'*32}
+        with unittest.mock.patch.object(self.bridge.native.unity,'recover',return_value={'restarted':True}) as recover:
+            self.assertTrue(self.client.call('unity_recover',args)['restarted'])
+            recover.assert_called_once_with(**args)
     def test_archive_schema_dispatch_and_vroid_existing_git(self):
         for tools in (client_module.GODOT_TOOLS,client_module.BLENDER_TOOLS,client_module.UNITY_TOOLS,client_module.VROID_TOOLS):
             names=[t['name'] for t in tools]
