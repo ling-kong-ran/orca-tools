@@ -50,6 +50,10 @@ Update the installed `local-gpu` Claude plugin to 1.8.0 and run `/reload-plugins
 | `unity_tools` | Discover current Pipeline tool names and schemas |
 | `unity_call` | Invoke one discovered tool with its typed arguments |
 
+Startup preserves stale scene backups automatically: while holding the project's Unity lock, the bridge moves `Temp/__Backupscenes` into a unique `Assets/_Recovery/bridge-<random-id>/` directory and gives non-conflicting `.backup` scenes the `.unity` extension. Existing recovery files are never overwritten. An already locked project or a linked recovery path is refused. This prevents the pre-import **Recovering Scene Backups** dialog from blocking Pipeline after a forced stop; it does not automatically accept license or project-upgrade prompts.
+
+`unity_start` is asynchronous. Poll `unity_tools` until `ready` is true, then read `console.status` before editing or capturing. Engine status distinguishes a `running` process from a `connected` Pipeline; process existence alone is not a successful connection. The Editor stays graphics-enabled for Scene/Game view capture, and commands continue through the official CLI.
+
 No CLI installation/authentication commands, generic shell, arbitrary C# eval, machine diagnostics or desktop screenshot fallback are exposed. Viewport screenshots use Unity's own view capture. All results pass through the shared remote privacy filter. The official CLI/Pipeline tool catalog can change: never guess names or parameters.
 
 CLI 1.0.0-beta.14 can return duplicate unqualified tool names across command groups. The bridge omits every ambiguous name (including `run`) instead of risking dispatch to the wrong operation. Batch dispatch, menu invocation and audit/package refresh shortcuts are also omitted. Unambiguous viewport and editing tools remain available; recheck the catalog after upgrading the CLI.

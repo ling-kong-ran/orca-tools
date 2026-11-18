@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
-from native_unity import UnityControl, DENIED
+from native_unity import UnityControl, DENIED, preserve_scene_backups, startup_lock
 
 
 class FakeEditor:
@@ -45,6 +45,54 @@ class UnityTests(unittest.TestCase):
         self.assertFalse(self.calls)
         (self.root/'Assets').rmdir()
         with self.assertRaisesRegex(ValueError,'not a Unity project'):self.control.project('approved')
+
+    def test_scene_recovery_preserves_existing_scenes_and_all_backup_bytes(self):
+        old=self.root/'Assets/_Recovery';old.mkdir();(old/'0.unity').write_bytes(b'old scene')
+        backups=self.root/'Temp/__Backupscenes';backups.mkdir(parents=True)
+        (backups/'0.backup').write_bytes(b'new unsaved scene')
+        (backups/'notes').write_bytes(b'metadata')
+        result=self.control.start('approved')
+        self.assertEqual(result['recovered_scenes'],1)
+        self.assertFalse(backups.exists())
+        self.assertEqual((old/'0.unity').read_bytes(),b'old scene')
+        saved=list(old.glob('bridge-*'));self.assertEqual(len(saved),1)
+        self.assertEqual((saved[0]/'0.unity').read_bytes(),b'new unsaved scene')
+        self.assertEqual((saved[0]/'notes').read_bytes(),b'metadata')
+        self.control.stop('approved')
+        self.assertEqual(self.control.start('approved')['recovered_scenes'],0)
+
+    def test_scene_recovery_does_not_touch_a_locked_project(self):
+        backups=self.root/'Temp/__Backupscenes';backups.mkdir(parents=True)
+        (backups/'0.backup').write_bytes(b'live scene')
+        with startup_lock(self.root):
+            with self.assertRaisesRegex(ValueError,'locked'):
+                self.control.start('approved')
+        self.assertFalse(self.calls)
+        self.assertEqual((backups/'0.backup').read_bytes(),b'live scene')
+
+    def test_scene_recovery_does_not_overwrite_colliding_files(self):
+        backups=self.root/'Temp/__Backupscenes';backups.mkdir(parents=True)
+        (backups/'0.backup').write_bytes(b'backup')
+        (backups/'0.unity').write_bytes(b'existing')
+        self.assertEqual(preserve_scene_backups(self.root),1)
+        saved=next((self.root/'Assets/_Recovery').glob('bridge-*'))
+        self.assertEqual((saved/'0.backup').read_bytes(),b'backup')
+        self.assertEqual((saved/'0.unity').read_bytes(),b'existing')
+
+    def test_running_editor_without_pipeline_is_not_connected(self):
+        self.control.start('approved')
+        self.assertTrue(self.control.status()['running'])
+        self.assertFalse(self.control.status()['connected'])
+        self.control.rpc_process=types.SimpleNamespace(poll=lambda:None)
+        with patch.object(self.control,'ensure_rpc'),patch.object(self.control,'_send',return_value={'tools':[{'name':'unity-cli-status'}]}):
+            self.assertFalse(self.control.tools('approved')['ready'])
+        with patch.object(self.control,'ensure_rpc'),patch.object(self.control,'_send',return_value={'tools':[{'name':'scene_info'}]}):
+            self.assertTrue(self.control.tools('approved')['ready'])
+            self.assertTrue(self.control.status()['connected'])
+        with patch.object(self.control,'ensure_rpc'),patch.object(self.control,'_send',side_effect=ValueError('disconnected')):
+            with self.assertRaises(ValueError):self.control.tools('approved')
+            self.assertFalse(self.control.status()['connected'])
+        self.control.rpc_process=None
 
     def test_no_desktop_fallback_or_inherited_credentials(self):
         with patch.dict('os.environ',{'CLAUDE_SECRET':'hidden','API_KEY':'hidden','UNITY_MCP_DESKTOP_FALLBACK':'1'}):
