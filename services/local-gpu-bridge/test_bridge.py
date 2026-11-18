@@ -19,6 +19,17 @@ class FakeAdapter:
     def upload(self,name,content):return {'reference':'local-gpu-bridge/'+name,'bytes':len(content)}
 
 class Tests(unittest.TestCase):
+    def test_archive_schema_dispatch_and_vroid_existing_git(self):
+        for tools in (client_module.GODOT_TOOLS,client_module.BLENDER_TOOLS,client_module.UNITY_TOOLS,client_module.VROID_TOOLS):
+            names=[t['name'] for t in tools]
+            self.assertEqual(len(names),len(set(names)))
+            for name in ('extract_project_archive','project_git','native_job_status','wait_native_job'):
+                self.assertIn(name,names)
+        args={'project_id':'test','archive_path':'assets.zip','destination':'art','request_id':'b'*32}
+        with unittest.mock.patch.object(self.bridge.native,'extract_project_archive',return_value={'id':'a'*32,'status':'queued'}) as extract:
+            result=self.client.call('extract_project_archive',args)
+            extract.assert_called_once_with(**args)
+            self.assertEqual(result['status'],'queued')
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.temp.name);(self.root/'workflows').mkdir()
         self.workflow=json.loads((pathlib.Path(__file__).parent/'example-workflow.json').read_text())

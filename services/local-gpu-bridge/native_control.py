@@ -70,7 +70,7 @@ class NativeControl:
         if media_settings.is_file():
             config.setdefault('native',{})['media_tools']=json.loads(media_settings.read_text(encoding='utf-8'))
         self.save_config=save_config;self.guard=guard or EgressGuard(config.get('native',{}));self.process_factory=process_factory
-        self.lock=threading.RLock();self.execute_lock=threading.Lock();self.blender=None;self.blender_project=None
+        self.lock=threading.RLock();self.execute_lock=threading.Lock();self.archive_lock=threading.Lock();self.blender=None;self.blender_project=None
         self.jobs={};self.plans={}
         from native_vroid import VroidControl
         self.vroid=VroidControl(self)
@@ -303,6 +303,35 @@ class NativeControl:
     def blender_scripts(self,operation,args):
         return operation in ('execute_code','run_script') or (operation=='batch' and any(self.blender_scripts(s['operation'],s.get('arguments',{})) for s in args['steps']))
     def save_job(self,job):job['updated_at']=time.time();atomic(self.root/'jobs'/(job['id']+'.json'),job)
+    def extract_project_archive(self,project_id,archive_path,destination,strip_components=0,expected_sha256=None,request_id=None):
+        from native_archive import validate_request
+        _,root=self.project(project_id)
+        args=dict(archive_path=archive_path,destination=destination,strip_components=strip_components,expected_sha256=expected_sha256)
+        if request_id is not None and (not isinstance(request_id,str) or not HEX.fullmatch(request_id)):
+            raise ValueError('request_id must contain 32 lowercase hexadecimal characters.')
+        request_id=request_id or uuid.uuid4().hex
+        fingerprint=hashlib.sha256(json.dumps({'project_id':project_id,'engine':'archive',**args},sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            previous=latest_attempt(self.jobs,request_id,fingerprint)
+            if previous:return self.public_job(previous)
+            validate_request(root,**args)
+            if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=8:raise ValueError('Native task queue is full.')
+            job={'id':uuid.uuid4().hex,'request_id':request_id,'fingerprint':fingerprint,'project_id':project_id,'engine':'archive','operation':'extract','arguments':args,'status':'queued','created_at':time.time(),'artifacts':[]}
+            self.jobs[job['id']]=job;self.save_job(job)
+            threading.Thread(target=self.run_archive,args=(job,),daemon=True).start()
+            return self.public_job(job)
+    def run_archive(self,job):
+        from native_archive import extract_archive
+        with self.archive_lock:
+            try:
+                _,root=self.project(job['project_id'])
+                with self.lock:job['status']='running';self.save_job(job)
+                result=extract_archive(root,**job['arguments'])
+                with self.lock:job.update(status='succeeded',result=result);self.save_job(job)
+            except Exception as exc:
+                # Never return paths, filenames embedded in OS errors, or raw tracebacks.
+                message=str(exc) if type(exc) is ValueError else 'Archive extraction failed. Check the archive and available disk space locally.'
+                with self.lock:job.update(status='failed',error=private_text(message));self.save_job(job)
     def project_git(self,project_id,operation='status',request_id=None):
         project,root=self.project(project_id)
         if operation=='status':

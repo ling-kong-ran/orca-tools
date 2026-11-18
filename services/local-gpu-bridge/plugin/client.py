@@ -78,6 +78,7 @@ NATIVE_COMMON = [
     tool('project_files','List approved project files, excluding secrets, executables, caches and Git metadata.',{'project_id':STR,'prefix':STR,'offset':{'type':'integer'},'limit':{'type':'integer'}},['project_id']),
     tool('read_project_file','Read one small project text file. Local addresses and absolute paths are redacted.',{'project_id':STR,'path':STR},['project_id','path']),
     tool('download_project_file','Download one approved local project file, such as a generated GLB, blend scene or screenshot, onto the VPS. Does not expose arbitrary local files.',{'project_id':STR,'path':STR,'destination_dir':STR},['project_id','path']),
+    tool('extract_project_archive','Extract an archive already downloaded to an approved GPU project into a NEW project-relative directory. Supports zip, tar, tar.gz, tgz, tar.bz2, tar.xz, tar.zst (Python 3.14+). Never overwrites or deletes the source. Rejects links, protected paths and executable files; limits 100000 entries/32 GiB. Returns a native job id immediately: poll native_job_status or wait_native_job. strip_components=1 removes a containing top-level folder. Optional expected_sha256 verifies the archive first. Reuse request_id after uncertain submissions.',{'project_id':STR,'archive_path':STR,'destination':STR,'strip_components':{'type':'integer','minimum':0,'maximum':8},'expected_sha256':{'type':'string','pattern':'^[a-fA-F0-9]{64}$'},'request_id':{'type':'string','pattern':'^[a-f0-9]{32}$'}},['project_id','archive_path','destination'],False),
     tool('project_git','Git is the only project sync path. status reads branch/head/change counts. fetch updates the configured remote branch. pull fetches then resets the local render mirror to that branch, discarding local tracked edits without backup. Commit and push development changes on the VPS before rendering; local tracked edits may be discarded. pull/fetch return a native task id. No shell, arbitrary Git args, remote URL changes, commit or push are exposed.',{'project_id':STR,'operation':{'type':'string','enum':['status','fetch','pull']},'request_id':STR},['project_id'],False),
     tool('native_job_status','Check a native render task once and list artifacts. To wait, use wait_native_job with the same job_id; do not create background sleep timers.',{'job_id':STR},['job_id']),
     tool('wait_native_job','Wait for an existing native task for up to 25 seconds (default 15), then return its latest status. If waiting=true, call this tool again with the SAME job_id. Never create Bash sleep commands, background wait timers or duplicate submissions to wait for rendering. This tool does not stop or restart any render.',{'job_id':STR,'max_wait_seconds':{'type':'integer','minimum':1,'maximum':25}},['job_id']),
@@ -98,7 +99,7 @@ BLENDER_TOOLS += [
     tool('cancel_blender_task','Cancel a queued Blender task, or stop the managed Blender process for a running task. Running cancellation discards unsaved scene changes. Save first when possible. Does not stop Unity, Godot or VRoid.',{'job_id':STR},['job_id'],False)
 ]
 
-VROID_TOOLS = NATIVE_COMMON[:6] + [
+VROID_TOOLS = NATIVE_COMMON[:5] + [t for t in NATIVE_COMMON if t['name'] in ('project_git','extract_project_archive','native_job_status','wait_native_job')] + [
     tool('vroid_tools','List supported VRoid operations and their argument fields. VRoid Studio uses a managed local editor; Toolkit export_vrm supports VRM 1.0 and 0.x after installing the Studio export extension.'),
     tool('vroid_operation','Control local VRoid Studio: create/open characters, face/body/hair/outfit presets, sliders and colors, camera, preview-only screenshots, save .vroid, and export_vrm. export_vrm requires {path: project-relative .vrm, title, author, format:1.0|0.0 (default 1.0), replace?:boolean}; it exports the current character without a dialog and returns to editing. Metadata has restrictive license defaults and no saved local contact details. Fetch with download_project_file, or use Blender import_asset. First read vroid_tools for the current server operation allowlist; use help for details. If an older session rejects export_vrm, call operation=save with exactly the same .vrm path/title/author/format/replace arguments; this is the same exporter, with no session restart. state reports editor_connected, model_ready and phase: awaiting_model means the editor is running WITHOUT an open character. Call create or open next; waiting cannot load a character. open/save paths are relative to an approved project. save requires path; replace=true allows overwrite. main_menu requires discard_changes=true after saving. screenshot/previews only mode=inline. Text metadata is filtered; images contain only the model preview. No shell, raw commands or whole-window screenshots. A timed-out edit may still be running: query status before repeating.',
          {'project_id':STR,'operation':STR,'arguments':{'type':'object'}},['project_id','operation'],False)
@@ -265,6 +266,10 @@ class Client:
         if name=='local_status':return self.request('/v1/native/status')
         if name=='project_files':return self.request('/v1/native/files',args)
         if name=='read_project_file':return self.request('/v1/native/read',args)
+        if name=='extract_project_archive':
+            body=dict(args);body.setdefault('request_id',uuid.uuid4().hex)
+            try:return self.request('/v1/native/extract',body)
+            except ValueError as e:raise ValueError(str(e)+' request_id='+body['request_id']) from None
         if name=='download_project_file':return self.download_project(args)
         if name=='project_git':
             body=dict(args)
@@ -383,7 +388,7 @@ def serve(client,tools=None):
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.9.2'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.10.0'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}

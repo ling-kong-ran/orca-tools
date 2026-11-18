@@ -313,6 +313,7 @@ def make_handler(bridge):
                     if self.command=='POST' and route=='/v1/native/git':return self.send_json(200,native.project_git(**self.body()))
                     if self.command=='POST' and route=='/v1/native/files':return self.send_json(200,native.files(**self.body()))
                     if self.command=='POST' and route=='/v1/native/read':return self.send_json(200,native.read_file(**self.body()))
+                    if self.command=='POST' and route=='/v1/native/extract':return self.send_json(202,native.extract_project_archive(**self.body()))
                     if self.command=='POST' and route=='/v1/native/sync/plan':return self.send_json(201,native.sync_plan(self.body()))
                     if self.command=='POST' and route=='/v1/native/sync/chunk':return self.send_json(200,native.upload_chunk(self.body()))
                     if self.command=='POST' and route=='/v1/native/sync/apply':return self.send_json(200,native.apply_sync(self.body().get('plan_id')))
