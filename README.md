@@ -65,6 +65,7 @@ Toolkit 统一管理模块入口、连接配置、启用状态与启动。账号
 
 - [可选旧账号面板/CLI](tools/account-switcher/)：Linux 普通用户服务；新版 Toolkit 直接调用远程 RPC，无需部署该面板。
 - [Local GPU Bridge](services/local-gpu-bridge/)：Windows GPU 执行服务与 Linux Claude MCP 插件。
+- [Claude Desktop GPU 接入](docs/claude-desktop-gpu.md)：Windows 官方桌面应用使用六组 GPU MCP 工具，支持 Tailscale 或独立凭据保护的私有 VM 网关。
 - [VRoid Studio](docs/vroid.md)：角色预设、脸型体型、颜色、镜头、模型预览和项目保存。
 - [Tripo Studio](docs/tripo.md)：用自己的 Studio 会员账号（国内站或国际站）图生/文生 3D、重拓扑、贴图、绑骨和动画；账号只留在本机。
 - [Unity](docs/unity.md)：本机 Unity LTS 编辑器与官方 CLI/Pipeline 接入同一工具集，VPS 开发、本机运行与视口截图。

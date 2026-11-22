@@ -165,18 +165,28 @@ def file_digest(file):
         for data in iter(lambda:stream.read(1024*1024),b''):h.update(data)
     return h.hexdigest()
 
+class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Endpoint pinning must also apply after the first request. Never forward
+        # the Bridge credential to a Location supplied by another endpoint.
+        return None
+
+
 class Client:
     def __init__(self, config_path):
         config = json.loads(pathlib.Path(config_path).read_text(encoding='utf-8'))
         parsed = urllib.parse.urlsplit(config['url'])
         try: host = ipaddress.ip_address(parsed.hostname)
         except ValueError: raise ValueError('Bridge endpoint must use a literal Tailscale IP.') from None
-        if parsed.scheme not in ('http', 'https') or (host not in ipaddress.ip_network('100.64.0.0/10') and not host.is_loopback) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+        private_networks = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')
+        pinned_private = (config.get('private_network_peer') == str(host) and
+                          any(host in ipaddress.ip_network(net) for net in private_networks))
+        if parsed.scheme not in ('http', 'https') or (host not in ipaddress.ip_network('100.64.0.0/10') and not host.is_loopback and not pinned_private) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
             raise ValueError('Bridge endpoint must be a loopback/Tailscale URL without credentials or a path.')
         if not isinstance(config.get('token'), str) or len(config['token']) < 32: raise ValueError('Invalid bridge credential.')
         self.base = config['url'].rstrip('/'); self.token = config['token']
         self.require_private_metadata = config.get('require_private_tailnet_metadata', False)
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoCredentialRedirect())
     def privacy_check(self):
         if not self.require_private_metadata: return
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -197,6 +207,8 @@ class Client:
             if stream: return response
             with response: return json.load(response)
         except urllib.error.HTTPError as error:
+            if 300 <= error.code < 400:
+                error.close(); raise ValueError('Bridge redirects are not allowed; check the configured endpoint.') from None
             if error.code == 403:
                 error.close(); raise ValueError('Bridge access denied. Check the configured token and allowed Tailscale peer.') from None
             try: detail = json.loads(error.read(8192)).get('error', 'Bridge request failed.')
