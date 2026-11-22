@@ -1,15 +1,31 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GPU Workflows</title><style>
 *{box-sizing:border-box}body{margin:0;background:#f4f6f9;color:#17243a;font:15px system-ui,sans-serif}main{max-width:1000px;margin:44px auto;padding:0 24px}h1{font-size:30px;margin:0 0 8px}p{color:#63728a;line-height:1.6}section{background:white;border:1px solid #dfe5ee;border-radius:16px;padding:24px;margin:22px 0}label{display:block;font-weight:600;margin:16px 0 7px}input:not([type=checkbox]),textarea{font:inherit;padding:10px 12px;border:1px solid #ccd6e4;border-radius:8px;width:100%}input[type=checkbox]{accent-color:#2463df}button{font:inherit;font-weight:600;background:#2463df;color:white;border:0;border-radius:9px;padding:12px 18px;cursor:pointer;margin-top:18px}button:disabled{opacity:.5;cursor:default}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{text-align:left;padding:10px 8px;border-bottom:1px solid #e7ebf1}td input{max-width:190px}small{color:#66768b}.notice{padding:12px;background:#edf3ff;border-radius:8px}.error{color:#b72727;white-space:pre-wrap}.ok{color:#146d47}.row{display:grid;grid-template-columns:1fr 1fr;gap:18px}.hidden{display:none}code{font-size:13px}#parameters{max-height:400px;overflow:auto}#catalog>div{padding:12px 0;border-bottom:1px solid #e7ebf1}#message{min-height:24px;margin-top:16px}@media(max-width:650px){.row{grid-template-columns:1fr}main{margin:24px auto;padding:0 12px}section{padding:18px}}
+.projects-heading,.project-heading,.project-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.projects-heading h2,.project-heading h3{margin:0}
+#project-list{display:grid;gap:10px;margin:16px 0}.project-item{border:1px solid #dcd9e6;border-left:3px solid #8774b2;background:#fff;border-radius:10px;padding:16px}.project-item[data-off=true]{border-left-color:#a6a5ae}.project-item code{display:block;color:#514b61;overflow-wrap:anywhere;margin:6px 0}.project-heading span{font-size:12px;color:#605675}.project-actions{justify-content:flex-start;margin-top:8px}.project-actions button{margin:0;padding:6px 12px}.project-info{line-height:1.6;color:#524a60}#project-form{padding:16px;background:#f8f7fb;border:1px solid #dcd9e6;border-radius:10px;margin:12px 0}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:8px 16px}.full-field{grid-column:1/-1}.form-grid label{margin:0}.form-grid input,.form-grid select{display:block;margin-top:5px;width:100%}#native-message:not(:empty){padding:10px;margin:8px 0;background:#f5f4fa}#projects-panel [hidden]{display:none!important}
 </style><main>
 <h1>GPU Workflows</h1><p>Your saved ComfyUI workflows are available to Claude automatically.</p>
-<section><h2>Projects &amp; native tools</h2><p>Commit and push remotely; Git updates the local render mirror before rendering. Project GDScript and Blender Python are available when enabled below. No generic shell tool is exposed.</p>
-<button id="native-refresh">Refresh native status</button> <button id="native-setup">Set up network privacy</button> <button id="blender-stop">Stop managed Blender</button>
-<div id="native-state">Loading native tools…</div><div id="native-message" role="status"></div>
-<details><summary>Add or edit project access</summary><div class="row"><div><label for="project-id">Project id</label><input id="project-id" value="game"></div><div><label for="project-name">Display name</label><input id="project-name" value="Game"></div></div>
-<label for="project-root">Local project folder</label><input id="project-root" placeholder="D:\Projects\game"><label for="godot-subdir">Godot subfolder</label><input id="godot-subdir" value="client"><label for="unity-subdir">Unity subfolder (empty for project root)</label><input id="unity-subdir" placeholder="UnityClient"><label><input id="project-enabled" type="checkbox" checked> Allow access to this project</label><div class="row"><div><label for="git-remote">Git remote</label><input id="git-remote" value="origin"></div><div><label for="git-branch">Git branch</label><input id="git-branch" value="main"></div></div><label><input id="git-enabled" type="checkbox" checked> Enable Git project sync</label><label><input id="git-auto" type="checkbox" checked> Automatically pull before rendering (local edits discarded without backup)</label><label><input id="project-scripts" type="checkbox" checked> Allow project GDScript and Blender Python</label><p><small>Scripts run with local user file access and can read hardware information. Tailscale encryption does not sandbox code. Network privacy setup is still required.</small></p><button id="project-save">Save project access</button></details>
-<h3>Git project sync</h3><div id="git-projects">Loading Git controls…</div><h3>Native tasks</h3><div id="native-jobs">No native tasks yet.</div>
-<p><small>Privacy setup applies only to dedicated renderer copies. It blocks external network traffic; project scripts still run locally, so sync trusted project code. This is not a complete operating-system sandbox.</small></p></section>
+<section id="projects-panel">
+<header class="projects-heading"><h2>项目管理</h2><div><button id="native-refresh">刷新</button> <button class="primary" id="project-new">登记项目</button></div></header>
+<div id="native-message" role="status"></div>
+<form id="project-form" hidden>
+<h3 id="form-title">登记项目</h3>
+<div class="form-grid"><label>项目 ID<input id="project-id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="my-game"></label>
+<label>显示名称<input id="project-name" required></label>
+<label class="full-field">本机仓库目录<input id="project-root" required placeholder="D:\Projects\my-game"></label>
+<label>Unity 子目录（根目录留空）<input id="unity-subdir"></label><label>Godot 子目录<input id="godot-subdir" value="client" required></label>
+<label>Git 远程<input id="git-remote" value="origin"></label><label>目标分支<input id="git-branch" value="main"></label>
+<label>同步策略<select id="project-policy"><option value="remote_wins">以远程为准</option><option value="local_review">本地审核</option></select></label></div>
+<label><input id="project-enabled" type="checkbox" checked> 启用项目</label>
+<label><input id="git-enabled" type="checkbox" checked> 启用 Git 同步</label>
+<label><input id="git-auto" type="checkbox" checked> 渲染前拉取（拉取会覆盖本地受跟踪改动）</label>
+<label><input id="project-scripts" type="checkbox"> 允许可信项目脚本使用本机用户权限</label>
+<button id="project-save" type="submit">保存项目</button> <button id="project-cancel" type="button">取消</button>
+</form>
+<label for="project-search">查找项目</label><input type="search" id="project-search" placeholder="按名称、项目 ID、分支或引擎搜索">
+<div id="project-list"></div>
+<details><summary>引擎状态与网络设置</summary><div id="native-state"></div><button id="native-setup">配置网络隔离</button> <button id="blender-stop">停止 Blender</button></details>
+<h3>本机任务</h3><div id="native-jobs"></div></section>
 <section><h2>Workflow library</h2><p>Save a workflow in ComfyUI to add it here. Changes are read from the original file. Models and output locations stay fixed.</p><button id="refresh">Refresh workflows</button><div id="catalog">Loading…</div></section>
 <section><details><summary>Advanced: import an API workflow</summary><p>Use this option for a separate API graph or a workflow with custom frontend widgets that cannot be converted automatically.</p>
 <label for="file">API workflow JSON</label><input id="file" type="file" accept=".json,application/json">
@@ -31,15 +47,82 @@ async function nativeState(){clearTimeout(nativeRefreshTimer);const data=await a
  if(data.privacy_setup?.status==='checking'||data.privacy_setup?.status==='awaiting_permission'){state.append(el('p',data.privacy_setup.status==='checking'?'Checking network privacy automatically…':'Windows network privacy setup is running. Approve the administrator prompt if shown.'));nativeRefreshTimer=setTimeout(()=>nativeState().catch(e=>nativeMessage(e.message,true)),2500);}
  if(data.privacy_setup?.status==='failed')state.append(el('p',data.privacy_setup.message));
  for(const engine of data.engines){const line=el('p',engine.engine[0].toUpperCase()+engine.engine.slice(1)+' · '+(engine.installed?'Installed':'Not installed')+' · '+(engine.network_isolated?'Network privacy ready':'Network privacy setup required')+(['blender','vroid','unity'].includes(engine.engine)?' · '+(engine.connected?'Connected':'Starts on first operation'):''));state.append(line);}
- for(const project of data.projects){const line=el('p'),toggle=el('input');toggle.type='checkbox';toggle.checked=project.enabled;const label=el('label');label.append(toggle,document.createTextNode(' '+project.name+' · '+project.root));line.append(label,el('small',project.allow_scripts?'Project scripts enabled · ':''),el('small',project.git?.enabled?'Git '+project.git.remote+'/'+project.git.branch+' · '+(project.git.auto_pull_before_render?'Auto-pull before rendering':'Manual Git update'):'Git sync disabled'));state.append(line);if(project.project_types?.length)line.append(el('small',' · '+project.project_types.map(t=>t==='unity'?'Unity':'Godot').join(' / ')));if(project.project_types?.includes('unity'))for(const [label,route] of [['Open Unity','unity-start'],['Stop Unity','unity-stop']]){const button=el('button',label);button.disabled=!project.enabled;button.onclick=async()=>{try{await api('/api/native/'+route,{project_id:project.id});await nativeState();nativeMessage('Unity request completed.');}catch(e){nativeMessage(e.message,true);}};line.append(button);}toggle.onchange=async()=>{try{await api('/api/native/project',{id:project.id,name:project.name,root:project.root,godot_subdir:project.godot_subdir,unity_subdir:project.unity_subdir,sync_policy:project.sync_policy,git:project.git,allow_scripts:project.allow_scripts,enabled:toggle.checked});nativeMessage('Project access updated.');}catch(e){nativeMessage(e.message,true);toggle.checked=!toggle.checked;}};}
- const gitProjects=$('git-projects');gitProjects.replaceChildren();
- for(const project of data.projects){if(!project.git?.enabled)continue;const card=el('div');card.append(el('p',project.name+' · '+project.git.remote+'/'+project.git.branch));for(const operation of ['status','pull']){const button=el('button',operation==='status'?'Check Git status':'Pull latest now');card.append(button);button.onclick=async()=>{button.disabled=true;try{const value=await api('/api/native/git',{project_id:project.id,operation});nativeMessage(operation==='status'?'Branch '+value.branch+' · '+(value.head?value.head.slice(0,10):'Awaiting first pull')+' · '+value.tracked_changes+' local changes · '+value.untracked_files+' untracked files':'Git update queued. Local edits are discarded without backup.');if(operation==='pull')await nativeState();}catch(e){nativeMessage(e.message,true);}finally{button.disabled=false;}};}gitProjects.append(card);}
+ projects=data.projects;renderProjects();
  const jobs=$('native-jobs');jobs.replaceChildren();if(!data.jobs.length)jobs.textContent='No native tasks yet.';for(const job of data.jobs){const card=el('div');card.append(el('p',job.engine+' · '+job.operation+' · '+job.status+(job.progress?' · '+job.progress.completed+'/'+job.progress.total:'')+(job.error?' · '+job.error:'')));if(job.result){const details=el('details'),summary=el('summary','View result'),pre=el('pre',JSON.stringify(job.result,null,2));pre.style.whiteSpace='pre-wrap';details.append(summary,pre);card.append(details);}if(job.engine==='blender'&&['queued','running'].includes(job.status)){const cancel=el('button','Cancel Blender task');cancel.onclick=async()=>{if(job.status==='running'&&!confirm('Stop managed Blender? Unsaved scene changes will be lost.'))return;try{await api('/api/native/blender-cancel',{ident:job.id});await nativeState();}catch(e){nativeMessage(e.message,true);}};card.append(cancel);}jobs.append(card);}if(data.jobs.some(job=>['queued','running'].includes(job.status))){clearTimeout(nativeRefreshTimer);nativeRefreshTimer=setTimeout(()=>nativeState().catch(e=>nativeMessage(e.message,true)),2500);}
 }
 $('native-refresh').onclick=()=>nativeState().catch(e=>nativeMessage(e.message,true));
 $('native-setup').onclick=async()=>{try{const result=await api('/api/native/setup',{});nativeMessage(result.message);}catch(e){nativeMessage(e.message,true);}};
 $('blender-stop').onclick=async()=>{try{await api('/api/native/stop-blender',{});await nativeState();nativeMessage('Managed Blender stopped.');}catch(e){nativeMessage(e.message,true);}};
-$('project-save').onclick=async()=>{try{await api('/api/native/project',{id:$('project-id').value.trim(),name:$('project-name').value.trim(),root:$('project-root').value.trim(),godot_subdir:$('godot-subdir').value.trim(),unity_subdir:$('unity-subdir').value.trim(),enabled:$('project-enabled').checked,allow_scripts:$('project-scripts').checked,sync_policy:'remote_wins',git:{enabled:$('git-enabled').checked,remote:$('git-remote').value.trim(),branch:$('git-branch').value.trim(),auto_pull_before_render:$('git-auto').checked}});await nativeState();nativeMessage('Project access saved.');}catch(e){nativeMessage(e.message,true);}};
+let projects=[];
+const form=$('project-form');
+const formFields={'project-id':'id','project-name':'name','project-root':'root','unity-subdir':'unity_subdir','godot-subdir':'godot_subdir','project-policy':'sync_policy'};
+function editProject(project){
+ form.reset();
+ $('project-id').readOnly=!!project;
+ if(project){
+  for(const [id,key] of Object.entries(formFields))$(id).value=project[key]??'';
+  $('project-enabled').checked=project.enabled;
+  $('project-scripts').checked=project.allow_scripts;
+  $('git-enabled').checked=!!project.git?.enabled;
+  $('git-auto').checked=!!project.git?.auto_pull_before_render;
+  $('git-remote').value=project.git?.remote||'origin';
+  $('git-branch').value=project.git?.branch||'main';
+ }
+ $('form-title').textContent=project?'编辑 '+project.name:'登记项目';
+ form.hidden=false;
+ $(project?'project-name':'project-id').focus();
+}
+$('project-new').onclick=()=>editProject(null);
+$('project-cancel').onclick=()=>{form.hidden=true;};
+$('project-search').oninput=renderProjects;
+function renderProjects(){
+ const list=$('project-list'), query=$('project-search').value.trim().toLowerCase();
+ list.replaceChildren();
+ for(const project of projects){
+  const types=project.project_types||[], git=project.git||{};
+  if(![project.name,project.id,project.root,git.branch,...types].join(' ').toLowerCase().includes(query))continue;
+  const card=el('article'),head=el('div'),actions=el('div');
+  card.className='project-item';card.dataset.off=String(!project.enabled);
+  head.className='project-heading';actions.className='project-actions';
+  head.append(el('h3',project.name),el('span',[...types.map(t=>t==='unity'?'Unity':'Godot'),project.enabled?'已启用':'已停用'].join(' · ')));
+  const info=el('div',[git.enabled?git.remote+'/'+git.branch:'Git 未启用',git.enabled?(git.auto_pull_before_render?'渲染前拉取':'手动拉取'):'',project.sync_policy==='remote_wins'?'以远程为准':'本地审核',project.allow_scripts?'允许脚本':'脚本关闭'].filter(Boolean).join(' · '));
+  info.className='project-info';
+  const edit=el('button','编辑');edit.onclick=()=>editProject(project);actions.append(edit);
+  function action(label,run,confirmText){
+   const button=el('button',label);button.disabled=!project.enabled;
+   button.onclick=async()=>{
+    if(confirmText&&!confirm(confirmText))return;
+    button.disabled=true;
+    try{nativeMessage(await run());await nativeState();}
+    catch(e){nativeMessage(e.message,true);}
+    finally{button.disabled=!project.enabled;}
+   };
+   actions.append(button);
+  }
+  if(git.enabled){
+   action('查看 Git 状态',async()=>{const v=await api('/api/native/git',{project_id:project.id,operation:'status'});return project.name+' · '+v.branch+' · '+(v.head||'').slice(0,8)+' · '+v.tracked_changes+' 项改动 · '+v.untracked_files+' 个未跟踪文件';});
+   action('拉取最新',async()=>{await api('/api/native/git',{project_id:project.id,operation:'pull'});return project.name+' 的拉取任务已加入队列';},'拉取 '+project.name+' 的 '+git.branch+' 分支将覆盖本地受跟踪改动。继续？');
+  }
+  if(types.includes('unity')){
+   action('打开 Unity',async()=>{await api('/api/native/unity-start',{project_id:project.id});return project.name+' 已请求启动 Unity';});
+   action('停止 Unity',async()=>{await api('/api/native/unity-stop',{project_id:project.id});return project.name+' 的 Unity 已停止';},'停止 '+project.name+' 的 Unity？未保存的编辑可能丢失。');
+  }
+  card.append(head,el('code',project.id+' · '+project.root),info,actions);list.append(card);
+ }
+ if(!list.childElementCount)list.append(el('p',query?'没有匹配的项目。':'还没有登记项目。'));
+}
+form.onsubmit=async(event)=>{
+ event.preventDefault();
+ const value={};
+ for(const [id,key] of Object.entries(formFields))value[key]=$(id).value.trim();
+ if(!$('project-id').readOnly&&projects.some(p=>p.id===value.id)){nativeMessage('项目 ID 已存在，请从列表点击编辑。',true);return;}
+ $('project-save').disabled=true;
+ try{
+  await api('/api/native/project',{...value,enabled:$('project-enabled').checked,allow_scripts:$('project-scripts').checked,git:{enabled:$('git-enabled').checked,remote:$('git-remote').value.trim(),branch:$('git-branch').value.trim(),auto_pull_before_render:$('git-auto').checked}});
+  form.hidden=true;await nativeState();nativeMessage(value.name+' 已保存');
+ }catch(e){nativeMessage(e.message,true);}
+ finally{$('project-save').disabled=false;}
+};
 async function catalog(){const data=await api('/api/workflows');$('catalog').replaceChildren();if(!data.workflows.length)$('catalog').textContent='No saved workflows found.';for(const w of data.workflows){const item=document.createElement('div'),title=document.createElement('strong'),detail=document.createElement('p');title.textContent=w.name||w.id;const count=Object.keys(w.parameters||{}).length;detail.textContent=(w.source==='local'?'Saved in ComfyUI':'Imported')+' · '+(w.available?'Ready':'Unavailable')+' · '+count+' editable inputs';item.append(title,detail);if(w.unavailable_reason){const error=document.createElement('p');error.className='error';error.textContent=w.unavailable_reason;item.append(error);}if(w.required_parameters?.length){const note=document.createElement('p');note.textContent='Input asset needed: '+w.required_parameters.join(', ');item.append(note);}if(count){const details=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('p');summary.textContent='View inputs';list.textContent=Object.entries(w.parameters).map(([name,s])=>name+' ('+s.type+')').join(' · ');details.append(summary,list);item.append(details);}$('catalog').append(item);}}
 $('refresh').addEventListener('click',async()=>{try{await catalog();message('Workflow library refreshed.');}catch(error){message(error.message,true);}});
 $('file').addEventListener('change',async()=>{try{
