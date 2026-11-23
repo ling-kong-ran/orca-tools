@@ -277,7 +277,8 @@ def make_handler(bridge):
         def send_json(self, status, value):
             if getattr(self, 'reply_started', False): self.close_connection = True; return
             self.reply_started = True
-            value = remote_json(value, resources=urllib.parse.urlsplit(self.path).path.startswith('/v1/tripo/'))
+            route = urllib.parse.urlsplit(self.path).path
+            value = remote_json(value, resources=route.startswith('/v1/tripo/'), omit_images=route == '/v1/unity/call')
             data = json.dumps(value, ensure_ascii=False).encode()
             self.send_response(status); self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(data))); self.send_header('Cache-Control', 'no-store')

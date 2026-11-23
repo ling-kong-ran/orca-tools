@@ -120,7 +120,7 @@ UNITY_TOOLS = NATIVE_COMMON + [
     tool('unity_recover','Restart ONLY the approved managed Unity Editor in automated mode when blocked. Requires discard_changes=true: unsaved edits are lost; save wanted changes first. Does not restart GPU Bridge or Blender and never retries the interrupted edit. Returns immediately after launch; poll unity_editor_state then unity_tools. Do not repeatedly restart a compiling/importing Editor. Reuse request_id after an uncertain response within the same Bridge session; after a Bridge restart inspect state first.',{'project_id':STR,'discard_changes':{'type':'boolean'},'request_id':{'type':'string','pattern':'^[a-f0-9]{32}$'}},['project_id','discard_changes'],False),
     tool('unity_stop','Stop only the managed Unity Editor for this project. Save scene changes through an exposed Editor tool first.',{'project_id':STR},['project_id'],False),
     tool('unity_tools','List the official Unity Pipeline tools exposed by this managed project. Shell, arbitrary C# eval, account and system tools are excluded.',{'project_id':STR},['project_id']),
-    tool('unity_call','Invoke a tool name and arguments obtained from unity_tools. Scenes, objects, assets, Play mode and viewport capture depend on the installed Pipeline catalog. No generic shell; no automatic retry of edits.',{'project_id':STR,'name':STR,'arguments':{'type':'object'}},['project_id','name'],False),
+    tool('unity_call','Invoke a tool discovered with unity_tools. For game_view or scene_view, use the returned project_id and path with download_project_file to stream the PNG. No automatic retry of edits.',{'project_id':STR,'name':STR,'arguments':{'type':'object'}},['project_id','name'],False),
 ]
 
 def vroid_state_result(result, operation):

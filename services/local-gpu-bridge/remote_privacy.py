@@ -50,6 +50,10 @@ ZONE_KEYS = {'timezone', 'timezoneid', 'localtimezone', 'systemtimezone', 'timez
 LOCAL_ZONE = re.compile(r'(?i)Asia/(?:Shanghai|Chongqing|Chungking|Harbin|Hong_Kong|Macao|Macau)|China Standard Time|中国标准时间|北京时间')
 PROVIDER = re.compile(r'(?i)\b(?:[a-z0-9-]+\.)*(?:bcebos\.com|tripo3d\.(?:com|ai))\b')
 ISO = re.compile(r'(?<!\w)\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)(?!\w)')
+# Try the local part only at the start of each eligible run. Word boundaries
+# inside encoded data (e.g. around '+') used to rescan the remaining megabytes.
+EMAIL_LOCAL = r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]"
+EMAIL = re.compile(rf'(?<!{EMAIL_LOCAL}){EMAIL_LOCAL}+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+\b', re.I)
 # Public schema identifiers are syntax, not account/CDN resources. Exact values
 # only: arbitrary URLs (including query strings) must not bypass redaction.
 SCHEMA_URIS = frozenset({
@@ -68,7 +72,8 @@ def utc_time(match):
 def remote_text(text, resources=False):
     text = HARDWARE_LABEL.sub(r'\1[hardware]', text)
     text = HARDWARE_MODEL.sub('[hardware]', text)
-    text = re.sub(r'(?i)\b[A-Z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+\b', '[email]', text)
+    if '@' in text:
+        text = EMAIL.sub('[email]', text)
     text = re.sub(r'(?i)(https?://)[^/\s@]+@', r'\1[credentials]@', text)
     text = re.sub(r'(?i)([?&](?:token|access_token|api_key|secret|signature|password)=)[^&\s"<>]+', r'\1[redacted]', text)
     text = ISO.sub(utc_time, text)
@@ -90,7 +95,7 @@ def remote_text(text, resources=False):
     return text
 
 
-def remote_json(value, resources=False):
+def remote_json(value, resources=False, *, omit_images=False):
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
@@ -98,20 +103,24 @@ def remote_json(value, resources=False):
                 if isinstance(item, str) and item in SCHEMA_URIS: result[key] = item
                 continue
             normalized = re.sub(r'[^a-z0-9]', '', key.lower())
+            if omit_images and (normalized in {'base64','imagebase64','pngbase64','contentbase64'}
+                                or (normalized == 'data' and value.get('type') == 'image')):
+                continue
             if normalized in PRIVATE: continue
             if normalized in ZONE_KEYS: continue
             if normalized in ('region', 'locale') and isinstance(item, str): continue
             if resources and isinstance(item, str) and item.startswith(('http://', 'https://')) and key != '$schema': continue
             if resources and normalized in ('error', 'message', 'detail') and isinstance(item, str):
                 item = re.sub(r'(?i)\b(?:China|Chinese)[ -]site\b|\bregion[\s:=]+(?:cn|china)\b|中国站|国内站', 'configured service', item)
-            result[key] = remote_json(item, resources)
+            result[key] = remote_json(item, resources, omit_images=omit_images)
         return result
-    if isinstance(value, list): return [remote_json(item, resources) for item in value]
+    if isinstance(value, list): return [remote_json(item, resources, omit_images=omit_images) for item in value]
     if isinstance(value, str):
+        if omit_images and value.startswith('data:image/'): return '[image omitted]'
         if value.startswith(('data:image/', 'data:audio/', 'data:application/')): return value
         try:
             parsed = json.loads(value)
-            if isinstance(parsed, (dict, list)): return json.dumps(remote_json(parsed, resources), ensure_ascii=False)
+            if isinstance(parsed, (dict, list)): return json.dumps(remote_json(parsed, resources, omit_images=omit_images), ensure_ascii=False)
         except (ValueError, TypeError): pass
         return remote_text(value, resources)
     return value

@@ -62,7 +62,9 @@ Startup preserves stale scene backups automatically: while holding the project's
 
 `unity_start` is asynchronous. Poll `unity_tools` until `ready` is true, then read `console.status` before editing or capturing. Engine status distinguishes a `running` process from a `connected` Pipeline; process existence alone is not a successful connection. The Editor stays graphics-enabled for Scene/Game view capture, and commands continue through the official CLI.
 
-No CLI installation/authentication commands, generic shell, arbitrary C# eval, machine diagnostics or desktop screenshot fallback are exposed. Viewport screenshots use Unity's own view capture. All results pass through the shared remote privacy filter. The official CLI/Pipeline tool catalog can change: never guess names or parameters.
+Use `unity_tools` to discover the installed capture commands. Call `unity_call` with `game_view` or `scene_view` for a PNG. The default output is `Assets/Screenshots/<id>.png` in the Unity project. The reply includes the registered project ID, download path, dimensions and byte count. Pass the returned `project_id` and `path` to `download_project_file` to stream the PNG onto the client. In Play mode, `game_view` with `source=screen` includes the Game view HUD.
+
+No CLI installation/authentication commands, generic shell, arbitrary C# eval, machine diagnostics or desktop screenshot fallback are exposed. All results pass through the shared remote privacy filter.
 
 CLI 1.0.0-beta.14 can return duplicate unqualified tool names across command groups. The bridge omits every ambiguous name (including `run`) instead of risking dispatch to the wrong operation. Batch dispatch, menu invocation and audit/package refresh shortcuts are also omitted. Unambiguous viewport and editing tools remain available; recheck the catalog after upgrading the CLI.
 

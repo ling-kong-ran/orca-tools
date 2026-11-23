@@ -4,6 +4,15 @@ from remote_privacy import remote_json, remote_text
 
 
 class RemotePrivacyTests(unittest.TestCase):
+    def test_unity_image_bytes_are_omitted_before_text_redaction(self):
+        payload = 'A+/B' * 250_000
+        reply = {'content':[{'type':'image','data':payload}, {'type':'text','text':
+            json.dumps({'base64':payload,'message':'contact first.last+ops@example.test'})}]}
+        result = remote_json(reply, omit_images=True)
+        self.assertLess(len(json.dumps(result)), 200)
+        self.assertEqual(json.loads(result['content'][1]['text']), {'message':'contact [email]'})
+        self.assertEqual(remote_text(payload + ' at first.last+ops@example.test'), payload + ' at [email]')
+
     def test_hardware_metadata_is_removed_from_nested_unity_replies(self):
         private = {'graphicsDeviceName': 'NVIDIA GeForce RTX 2060',
                    'graphics_device_vendor': 'NVIDIA', 'graphicsDeviceID': 123,

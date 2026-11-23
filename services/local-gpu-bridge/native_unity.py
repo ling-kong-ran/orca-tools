@@ -17,6 +17,21 @@ from native_control import inside
 EXCLUDED = 'exec,script.eval,script.eval_file,system.*,environment.*,network.*,auth.*,account.*,license.*,desktop.*'
 DENIED = re.compile(r'(?:^|[._ /-])(?:exec|shell|eval|eval_file|environment|system|network|auth|account|license|desktop)(?:$|[._ /-])', re.I)
 DENIED_NAMES = {'batch', 'invoke_menu', 'run_audit', 'resolve'}
+CAPTURE_PATHS = {'game_view':'save_path', 'scene_view':'save_path', 'screenshot':'output',
+                 'editor_element':'output', 'runtime_element':'output'}
+
+
+def capture_path(root, requested, *, asset_relative=False):
+    relative = requested if requested not in (None, '') else 'Assets/Screenshots/' + uuid.uuid4().hex + '.png'
+    if asset_relative:
+        inside(root, relative)
+        if relative.split('/')[0] not in ('Assets', 'Packages'):
+            relative = 'Assets/' + relative
+    path = inside(root, relative)
+    startup_path(root, relative)
+    if path.suffix.lower() != '.png':
+        raise ValueError('Use a project-relative PNG output path.')
+    return path
 
 
 def startup_path(root, relative):
@@ -289,9 +304,41 @@ class UnityControl:
                 # Some CLI releases flatten command groups to duplicate names.
                 # Never route an ambiguous "run" to a different command group.
                 if counts[name] != 1 or DENIED.search(name) or name in DENIED_NAMES: continue
+                if name in CAPTURE_PATHS:
+                    props = dict(entry.get('inputSchema', {}).get('properties', {}))
+                    if CAPTURE_PATHS[name] not in props: continue
+                    props.pop('include_inline_image', None)
+                    props.pop('max_resolution', None)
+                    props[CAPTURE_PATHS[name]] = {'type':'string','description':'Optional project-relative PNG output path.'}
+                    entry = {**entry, 'description':f'Capture {name} to a project PNG. Fetch the returned path with download_project_file.',
+                             'inputSchema':{**entry['inputSchema'], 'properties':props}}
                 tools.append({k:entry[k] for k in ('name','description','inputSchema') if k in entry})
             self.pipeline_ready = any(entry['name'] != 'unity-cli-status' for entry in tools)
             return {'tools':tools + QUALIFIED_TOOLS, 'ready':self.pipeline_ready}
+
+    def capture(self, project_id, name, arguments):
+        project, root = self.project(project_id)
+        key = CAPTURE_PATHS[name]
+        path = capture_path(root, arguments.get(key), asset_relative=key == 'save_path')
+        relative = path.relative_to(root).as_posix()
+        output = str(path) if name == 'runtime_element' else relative
+        args = {**arguments, key:output}
+        if key == 'save_path':
+            args['include_inline_image'] = False
+        previous = path.stat() if path.exists() else None
+        reply = self._send('tools/call', {'name':name, 'arguments':args})
+        if reply.get('isError') or not inside(root,relative).is_file():
+            raise ValueError('Unity did not write the screenshot. Check the selected view and Editor state.')
+        current = path.stat()
+        if previous and (current.st_mtime_ns,current.st_size) == (previous.st_mtime_ns,previous.st_size):
+            raise ValueError('Unity did not update the requested PNG.')
+        with path.open('rb') as stream:
+            header = stream.read(24)
+        if len(header) != 24 or header[:16] != b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR':
+            raise ValueError('Unity returned an invalid PNG.')
+        download = pathlib.PurePosixPath(project.get('unity_subdir') or '') / relative
+        return {'project_id':project_id, 'path':download.as_posix(), 'bytes':current.st_size,
+                'width':int.from_bytes(header[16:20], 'big'), 'height':int.from_bytes(header[20:24], 'big')}
 
     def call(self, project_id, name, arguments=None):
         if not isinstance(name,str) or DENIED.search(name) or name in DENIED_NAMES: raise ValueError('This Unity tool is not exposed.')
@@ -303,7 +350,22 @@ class UnityControl:
             exposed = {tool['name'] for tool in self.tools(project_id)['tools']}
             if name not in exposed: raise ValueError('Read unity_tools and use an exposed tool name.')
             if name in BY_NAME: return invoke(self, project_id, name, arguments)
-            try: return self._send('tools/call',{'name':name,'arguments':arguments})
+            try:
+                if name in CAPTURE_PATHS: return self.capture(project_id, name, arguments)
+                if name == 'wait' and arguments.get('on_met'):
+                    action = arguments['on_met']
+                    if isinstance(action, str): action = json.loads(action)
+                    if not isinstance(action, dict): raise ValueError('on_met must be an object.')
+                    if action.get('capture') is not None:
+                        capture = action['capture']
+                        if not isinstance(capture, dict): raise ValueError('on_met.capture must be an object.')
+                        project, root = self.project(project_id)
+                        path = capture_path(root, capture.get('save_path'), asset_relative=True).relative_to(root).as_posix()
+                        action = {**action, 'capture':{**capture, 'save_path':path, 'include_image':False}}
+                        args = {**arguments, 'on_met':action}
+                        result = self._send('tools/call', {'name':name, 'arguments':args})
+                        return {**result, 'capture_path':(pathlib.PurePosixPath(project.get('unity_subdir') or '') / path).as_posix()}
+                return self._send('tools/call',{'name':name,'arguments':arguments})
             except (OSError, BrokenPipeError):
                 logging.exception('Unity MCP transport stopped')
                 raise ValueError('Unity connection stopped. Inspect editor state; edits are never retried automatically.') from None

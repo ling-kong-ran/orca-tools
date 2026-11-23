@@ -17,6 +17,40 @@ class FakeEditor:
 
 
 class UnityTests(unittest.TestCase):
+    def test_capture_writes_png_and_returns_only_download_fields(self):
+        header = bytes.fromhex('89504e470d0a1a0a0000000d494844520000028000000168')
+        def render(method, request):
+            args = request['arguments']
+            self.assertFalse(args['include_inline_image'])
+            path = self.root / args['save_path']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(header)
+            return {'content':[{'type':'image','data':'should never be forwarded'}]}
+        with patch.object(self.control, '_send', side_effect=render):
+            result = self.control.capture('approved', 'game_view', {'include_inline_image':True})
+        self.assertTrue(result['path'].startswith('Assets/Screenshots/'))
+        self.assertEqual(result, {'project_id':'approved', 'path':result['path'], 'bytes':24, 'width':640, 'height':360})
+        self.assertEqual((self.root/result['path']).read_bytes(), header)
+        with patch.object(self.control, '_send', return_value={'isError':True}):
+            with self.assertRaises(ValueError):
+                self.control.capture('approved', 'game_view', {'save_path':result['path']})
+            self.assertEqual((self.root/result['path']).read_bytes(), header)
+            with self.assertRaises(ValueError):
+                self.control.capture('approved', 'screenshot', {'output':'../outside.png'})
+
+    def test_wait_capture_uses_a_downloadable_nested_project_path(self):
+        self.native.project = lambda ident: ({'id':ident, 'unity_subdir':'unity'}, self.root)
+        for part in ('Assets','Packages','ProjectSettings'):
+            (self.root/'unity'/part).mkdir(parents=True)
+        with patch.object(self.control, 'tools', return_value={'tools':[{'name':'wait'}]}), \
+                patch.object(self.control, '_send', return_value={'pending':True}) as send:
+            r = self.control.call('approved','wait',{'on_met':{'capture':{
+                'save_path':'Screenshots/frame.png','include_image':True},'pause':True}})
+        action = send.call_args.args[1]['arguments']['on_met']
+        self.assertTrue(action['pause'])
+        self.assertEqual(action['capture'], {'save_path':'Assets/Screenshots/frame.png','include_image':False})
+        self.assertEqual(r, {'pending':True,'capture_path':'unity/Assets/Screenshots/frame.png'})
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=pathlib.Path(self.temp.name)
