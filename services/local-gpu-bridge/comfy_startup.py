@@ -14,6 +14,9 @@ def launch_spec(config):
     value = config.get('comfy_startup', {})
     if not value.get('enabled', False):
         return None
+    threads = value.get('cpu_threads')
+    if threads is not None and (type(threads) is not int or threads < 1):
+        raise ValueError('ComfyUI cpu_threads must be a positive integer.')
     url = urllib.parse.urlsplit(config.get('comfy_url', 'http://127.0.0.1:8188'))
     if url.scheme != 'http' or url.hostname != '127.0.0.1' or url.username or url.password or url.path not in ('', '/') or url.query or url.fragment:
         raise ValueError('ComfyUI startup requires a loopback HTTP URL.')
@@ -82,7 +85,11 @@ def ensure(config, timeout=300):
         if not occupied:
             with (root / 'comfy-startup.log').open('ab') as stream:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if os.name == 'nt' else 0
-                process = subprocess.Popen(command, cwd=cwd, env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+                env = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
+                threads = config['comfy_startup'].get('cpu_threads')
+                if threads is not None:
+                    env.update(OMP_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads))
+                process = subprocess.Popen(command, cwd=cwd, env=env,
                                            stdin=subprocess.DEVNULL, stdout=stream, stderr=stream,
                                            creationflags=flags, shell=False)
         deadline = time.monotonic() + timeout

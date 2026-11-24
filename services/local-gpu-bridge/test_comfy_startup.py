@@ -37,6 +37,7 @@ class StartupTests(unittest.TestCase):
             first.close()
 
     def test_successful_start_uses_fixed_arguments_and_no_shell(self):
+        self.config['comfy_startup']['cpu_threads'] = 1
         sock = MagicMock(); sock.__enter__.return_value.connect_ex.return_value = 1
         process = MagicMock(); process.poll.return_value = None
         with patch('socket.socket', return_value=sock), patch.object(startup, 'healthy', side_effect=[False, False, True]), \
@@ -44,7 +45,15 @@ class StartupTests(unittest.TestCase):
             self.assertEqual(startup.ensure(self.config), 'ready')
             self.assertEqual(spawn.call_count, 1)
             self.assertFalse(spawn.call_args.kwargs['shell'])
+            env = spawn.call_args.kwargs['env']
+            self.assertEqual((env['OMP_NUM_THREADS'], env['MKL_NUM_THREADS']), ('1', '1'))
             self.assertEqual(spawn.call_args.args[0][-3:], ['127.0.0.1', '--port', '8188'])
+
+    def test_invalid_cpu_thread_count_is_rejected(self):
+        for count in (True, 0, -1, '1'):
+            self.config['comfy_startup']['cpu_threads'] = count
+            with self.assertRaisesRegex(ValueError, 'cpu_threads'):
+                startup.launch_spec(self.config)
 
     def test_occupied_port_is_not_replaced_and_failed_process_is_not_retried(self):
         sock = MagicMock(); sock.__enter__.return_value.connect_ex.return_value = 0

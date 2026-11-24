@@ -33,13 +33,15 @@ python scripts/install-local-gpu.py --settings scripts/gpu-settings.local.json
 | --- | --- |
 | `listen` | 本机 Tailscale IPv4 |
 | `allowed_peers` | 允许调用服务的 VPS Tailscale IPv4 列表 |
-| `comfy_startup` | 可选 ComfyUI 自启：enabled、root、python；可配置 input_directory、output_directory、model_paths_config |
+| `comfy_startup` | ComfyUI 自启使用 `enabled`、`root`、`python`。可用 `input_directory`、`output_directory`、`model_paths_config` 指定目录和模型配置。 |
 | `workflow_dirs` | 本机 ComfyUI 保存工作流的实际目录，支持多个 |
 | `native.godot_executable` | 普通 Godot exe 的完整路径 |
 | `native.blender_executable` | 普通 Blender exe 的完整路径 |
 | `native.projects[].root` | 已克隆的本机渲染副本根目录 |
 | `git.remote / git.branch` | 本机已有 remote 名称与远程分支，默认 origin/main |
 | `allow_scripts` | 是否允许项目 GDScript / Blender Python；仅对可信项目开启 |
+
+如果 Windows 上的 GPU 工作流反复执行后累积大量 OpenMP 工作线程，可在 `comfy_startup` 中设置 `"cpu_threads": 1`。启动器在 ComfyUI 进程启动前设置 `OMP_NUM_THREADS` 和 `MKL_NUM_THREADS`。省略此项时继承原环境。修改后在队列空闲时重启 ComfyUI 生效。CPU 密集型节点可能变慢。
 
 只用 ComfyUI 时，可以将 `native` 设为 `{"projects":[]}`；只用一种原生渲染器时删除另一种的 executable 字段。不需要 GPU 程序的安装包加入仓库。
 
