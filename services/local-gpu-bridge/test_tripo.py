@@ -347,13 +347,28 @@ r.authenticated=false;await assert.rejects(()=>r.run(1),TripoError);
         self.assertEqual(marker['schema_version'], 1); self.assertEqual(len(marker['ownership_token']), 43)
         self.assertEqual(self.control.profile_dir(), profile)
 
+    def test_old_bootstrap_cannot_stop_or_release_new_requests(self):
+        import io, threading, types
+        current=self.control.ensure_started()
+        old=types.SimpleNamespace(stdout=io.BytesIO(b''))
+        waiting={'process':current,'event':threading.Event(),'value':None}
+        self.control.pending['new-request']=waiting
+        try:
+            self.control._read(old)
+            self.control.stop(expected=old)
+            self.assertFalse(waiting['event'].is_set())
+            self.assertIs(self.control.process,current)
+            self.assertIsNone(current.poll())
+        finally:
+            self.control.pending.pop('new-request')
+
     def test_stopped_backend_restarts_and_repeats_only_reads(self):
         gone = {'content': [{'type': 'text', 'text': 'The Bootstrap could not connect to its local backend.'}], 'isError': True}
         fine = {'content': [{'type': 'text', 'text': '{}'}], 'isError': False}
-        with unittest.mock.patch.object(self.control, '_call', side_effect=[gone, fine]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
+        with unittest.mock.patch.object(self.control, '_call', side_effect=[(object(),gone), (object(),fine)]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
             self.assertFalse(self.control.call('tripo_get_status', {})['isError'])
             self.assertEqual(call.call_count, 2); stop.assert_called_once()
-        with unittest.mock.patch.object(self.control, '_call', side_effect=[gone, fine]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
+        with unittest.mock.patch.object(self.control, '_call', side_effect=[(object(),gone), (object(),fine)]) as call, unittest.mock.patch.object(self.control, 'stop') as stop:
             self.assertTrue(self.control.call('tripo_start_workflow', {})['isError'])
             self.assertEqual(call.call_count, 1); stop.assert_called_once()
 

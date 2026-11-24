@@ -8,6 +8,10 @@
 <section id="projects-panel">
 <header class="projects-heading"><h2>项目管理</h2><div><button id="native-refresh">刷新</button> <button class="primary" id="project-new">登记项目</button></div></header>
 <div id="native-message" role="status"></div>
+<form id="capacity-form" hidden>
+<label for="render-maximum">渲染并发上限</label>
+<div class="project-actions"><input id="render-maximum" type="number" min="1" max="32" step="1" required style="width:6em"><button>保存上限</button><span id="render-usage" role="status"></span></div>
+</form>
 <form id="project-form" hidden>
 <h3 id="form-title">登记项目</h3>
 <div class="form-grid"><label>项目 ID<input id="project-id" required pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="my-game"></label>
@@ -24,7 +28,7 @@
 </form>
 <label for="project-search">查找项目</label><input type="search" id="project-search" placeholder="按名称、项目 ID、分支或引擎搜索">
 <div id="project-list"></div>
-<details><summary>引擎状态与网络设置</summary><div id="native-state"></div><button id="native-setup">配置网络隔离</button> <button id="blender-stop">停止 Blender</button></details>
+<details><summary>引擎状态与网络设置</summary><div id="native-state"></div><button id="native-setup">配置网络隔离</button></details>
 <h3>本机任务</h3><div id="native-jobs"></div></section>
 <section><h2>Workflow library</h2><p>Save a workflow in ComfyUI to add it here. Changes are read from the original file. Models and output locations stay fixed.</p><button id="refresh">Refresh workflows</button><div id="catalog">Loading…</div></section>
 <section><details><summary>Advanced: import an API workflow</summary><p>Use this option for a separate API graph or a workflow with custom frontend widgets that cannot be converted automatically.</p>
@@ -47,12 +51,24 @@ async function nativeState(){clearTimeout(nativeRefreshTimer);const data=await a
  if(data.privacy_setup?.status==='checking'||data.privacy_setup?.status==='awaiting_permission'){state.append(el('p',data.privacy_setup.status==='checking'?'Checking network privacy automatically…':'Windows network privacy setup is running. Approve the administrator prompt if shown.'));nativeRefreshTimer=setTimeout(()=>nativeState().catch(e=>nativeMessage(e.message,true)),2500);}
  if(data.privacy_setup?.status==='failed')state.append(el('p',data.privacy_setup.message));
  for(const engine of data.engines){const line=el('p',engine.engine[0].toUpperCase()+engine.engine.slice(1)+' · '+(engine.installed?'Installed':'Not installed')+' · '+(engine.network_isolated?'Network privacy ready':'Network privacy setup required')+(['blender','vroid','unity'].includes(engine.engine)?' · '+(engine.connected?'Connected':'Starts on first operation'):''));state.append(line);}
+ const capacity=data.render_capacity;
+ if(capacity){
+  $('capacity-form').hidden=false;
+  const field=$('render-maximum');
+  if(!field.value || field.value===field.defaultValue){field.value=capacity.maximum;}
+  field.defaultValue=capacity.maximum;
+  $('render-usage').textContent='已占用 '+capacity.in_use+' · 当前可用总上限 '+capacity.effective;
+ }
  projects=data.projects;renderProjects();
  const jobs=$('native-jobs');jobs.replaceChildren();if(!data.jobs.length)jobs.textContent='No native tasks yet.';for(const job of data.jobs){const card=el('div');card.append(el('p',job.engine+' · '+job.operation+' · '+job.status+(job.progress?' · '+job.progress.completed+'/'+job.progress.total:'')+(job.error?' · '+job.error:'')));if(job.result){const details=el('details'),summary=el('summary','View result'),pre=el('pre',JSON.stringify(job.result,null,2));pre.style.whiteSpace='pre-wrap';details.append(summary,pre);card.append(details);}if(job.engine==='blender'&&['queued','running'].includes(job.status)){const cancel=el('button','Cancel Blender task');cancel.onclick=async()=>{if(job.status==='running'&&!confirm('Stop managed Blender? Unsaved scene changes will be lost.'))return;try{await api('/api/native/blender-cancel',{ident:job.id});await nativeState();}catch(e){nativeMessage(e.message,true);}};card.append(cancel);}jobs.append(card);}if(data.jobs.some(job=>['queued','running'].includes(job.status))){clearTimeout(nativeRefreshTimer);nativeRefreshTimer=setTimeout(()=>nativeState().catch(e=>nativeMessage(e.message,true)),2500);}
 }
 $('native-refresh').onclick=()=>nativeState().catch(e=>nativeMessage(e.message,true));
 $('native-setup').onclick=async()=>{try{const result=await api('/api/native/setup',{});nativeMessage(result.message);}catch(e){nativeMessage(e.message,true);}};
-$('blender-stop').onclick=async()=>{try{await api('/api/native/stop-blender',{});await nativeState();nativeMessage('Managed Blender stopped.');}catch(e){nativeMessage(e.message,true);}};
+$('capacity-form').onsubmit=async event=>{
+ event.preventDefault();
+ try{await api('/api/native/render-capacity',{maximum:$('render-maximum').valueAsNumber});await nativeState();nativeMessage('已保存并发上限');}
+ catch(error){nativeMessage(error.message,true);}
+};
 let projects=[];
 const form=$('project-form');
 const formFields={'project-id':'id','project-name':'name','project-root':'root','unity-subdir':'unity_subdir','godot-subdir':'godot_subdir','project-policy':'sync_policy'};
@@ -87,7 +103,7 @@ function renderProjects(){
   head.append(el('h3',project.name),el('span',[...types.map(t=>t==='unity'?'Unity':'Godot'),project.enabled?'已启用':'已停用'].join(' · ')));
   const info=el('div',[git.enabled?git.remote+'/'+git.branch:'Git 未启用',git.enabled?(git.auto_pull_before_render?'渲染前拉取':'手动拉取'):'',project.sync_policy==='remote_wins'?'以远程为准':'本地审核',project.allow_scripts?'允许脚本':'脚本关闭'].filter(Boolean).join(' · '));
   info.className='project-info';
-  const edit=el('button','编辑');edit.onclick=()=>editProject(project);actions.append(edit);
+  const edit=el('button','编辑');edit.onclick=()=>editProject(project);if(!project.scratch)actions.append(edit);
   function action(label,run,confirmText){
    const button=el('button',label);button.disabled=!project.enabled;
    button.onclick=async()=>{
@@ -102,6 +118,12 @@ function renderProjects(){
   if(git.enabled){
    action('查看 Git 状态',async()=>{const v=await api('/api/native/git',{project_id:project.id,operation:'status'});return project.name+' · '+v.branch+' · '+(v.head||'').slice(0,8)+' · '+v.tracked_changes+' 项改动 · '+v.untracked_files+' 个未跟踪文件';});
    action('拉取最新',async()=>{await api('/api/native/git',{project_id:project.id,operation:'pull'});return project.name+' 的拉取任务已加入队列';},'拉取 '+project.name+' 的 '+git.branch+' 分支将覆盖本地受跟踪改动。继续？');
+  }
+  if(project.vroid_running){
+   action('停止 VRoid',async()=>{await api('/api/native/stop-vroid',{project_id:project.id});return project.name+' 的 VRoid 已停止';},'停止 '+project.name+' 的 VRoid？未保存的编辑可能丢失。');
+  }
+  if(project.blender_running){
+   action('停止 Blender',async()=>{await api('/api/native/stop-blender',{project_id:project.id});return project.name+' 的 Blender 已停止';},'停止 '+project.name+' 的 Blender？未保存的编辑可能丢失。');
   }
   if(types.includes('unity')){
    action('打开 Unity',async()=>{await api('/api/native/unity-start',{project_id:project.id});return project.name+' 已请求启动 Unity';});

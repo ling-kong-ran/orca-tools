@@ -1,6 +1,8 @@
 """Project-scoped adapter for the loopback-only vroid-studio-mcp editor plugin."""
+import uuid
+import hashlib
 import base64, json, logging, pathlib, socket, struct, threading, time, urllib.request, zlib
-from native_control import inside, private_result, private_text
+from native_control import atomic, inside, private_result, private_text
 
 FIELDS = {
     'state': set(), 'status': set(), 'sections': set(),
@@ -52,13 +54,18 @@ def clean_png(encoded):
 
 
 class VroidControl:
-    def __init__(self, native):
+    def __init__(self, native, session_dir=None):
+        self.session_dir = session_dir
+        self.port = 17891
+        self.session_id = None
+        self.ports = ()
+        self.verified = False
         self.native = native; self.process = None
         self.lock = threading.Lock(); self.start_lock = threading.Lock()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def rpc(self, method, params=None, timeout=90):
-        request = urllib.request.Request('http://127.0.0.1:17891/mcp/',
+        request = urllib.request.Request(f'http://127.0.0.1:{self.port}/mcp/',
             json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params or {}}).encode(),
             {'Content-Type': 'application/json', 'Accept': 'application/json'})
         with self.opener.open(request, timeout=timeout) as response:
@@ -86,23 +93,45 @@ class VroidControl:
         self.native.guard.require('vroid')
         if not self.settings_ready(): raise ValueError('VRoid MCP loopback configuration is not ready. Run the local VRoid installer.')
         with self.start_lock:
-            if self.process is not None and self.process.poll() is None: return
-            # Never attach to an unrelated local editor listening on the same port.
-            with socket.socket() as probe:
-                probe.settimeout(1)
-                if probe.connect_ex(('127.0.0.1', 17891)) == 0:
-                    raise ValueError('The VRoid MCP port is already occupied by another editor. Close that editor first.')
+            if self.process is not None and self.process.poll() is None:
+                if self.session_id and self.rpc('ping',timeout=2).get('bridge_session') != self.session_id:
+                    raise ValueError('The project editor endpoint changed. Stop the managed session before retrying.')
+                return
+            self.verified = False
+            exe = pathlib.Path(self.native.config['native'].get('vroid_executable',''))
+            folder = self.session_dir or self.native.root
+            folder.mkdir(parents=True, exist_ok=True)
+            env = {}
+            if self.session_dir:
+                tcp, self.port = self.native.vroid.assign_ports(self)
+                settings = json.loads((exe.parent/'BepInEx/config/com.kokokoshka.vroidstudiomcp.servers.json').read_text())
+                settings.update(tcp=f'127.0.0.1:{tcp}', mcp=f'127.0.0.1:{self.port}', dev_tools=False, debug_artifacts=False)
+                atomic(folder/'servers.json', settings)
+                self.session_id = uuid.uuid4().hex
+                env.update(VROID_SESSION_SETTINGS=str(folder/'servers.json'), VROID_SESSION_ID=self.session_id)
+            else:
+                with socket.socket() as probe:
+                    probe.settimeout(1)
+                    if probe.connect_ex(('127.0.0.1', self.port)) == 0:
+                        raise ValueError('The VRoid MCP port is already occupied by another editor. Close that editor first.')
             if self.process is not None: self.process.close()
-            exe = pathlib.Path(self.native.config['native']['vroid_executable'])
-            # Unity can keep its API queue alive with SW_HIDE while rendering only
-            # black pixels. Show the editor without taking keyboard focus.
-            self.process = self.native.process_factory([str(exe), '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720', '-logFile', str(self.native.root/'vroid-unity.log')], exe.parent, self.native.root/'vroid.log', show_window=True)
+            args = [str(exe), '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720',
+                    '-logFile', str(folder/'vroid-unity.log')]
+            self.process = self.native.process_factory(args, exe.parent, folder/'vroid.log', env, show_window=True)
             deadline = time.monotonic()+180
             while time.monotonic() < deadline:
-                if self.process.poll() is not None: raise ValueError('Managed VRoid stopped. Check the local VRoid log.')
-                try: self.rpc('ping', timeout=2); return
-                except Exception: time.sleep(0.5)
-            raise ValueError('VRoid is still starting. Check the local editor before retrying an edit.')
+                if self.process.poll() is not None: break
+                try:
+                    info = self.rpc('ping', timeout=2)
+                    if not self.session_id or info.get('bridge_session') == self.session_id:
+                        self.verified = True
+                        return
+                except (OSError,ValueError): pass
+                time.sleep(0.5)
+            self.process.stop()
+            self.process.close()
+            self.process = None
+            raise ValueError('Managed VRoid failed to start its project endpoint. Check local editor logs.')
 
     def validate(self, root, operation, arguments):
         operation = effective_operation(operation, arguments)
@@ -218,3 +247,93 @@ class VroidControl:
                 if total > 11*1024**2: raise ValueError('VRoid preview batch is too large.')
                 content.append({'type': 'image', 'mimeType': 'image/png', 'data': image})
         return {'content': content, 'isError': bool(result.get('isError'))}
+
+
+class VroidProjects:
+    def __init__(self, native):
+        self.native = native
+        self.base = VroidControl(native)
+        self.sessions = {}
+        self.legacy_owner = None
+
+    def tools(self):
+        return self.base.tools()
+
+    def status(self):
+        result = self.base.status()
+        with self.native.lock:
+            result['connected'] = any(s.process and s.process.poll() is None for s in self.sessions.values())
+        return result
+
+    def assign_ports(self, session):
+        # Windows may offer the same ephemeral port again before Studio starts listening.
+        with self.native.lock:
+            claimed = {port for other in self.sessions.values() for port in other.ports if other is not session}
+            selected = []
+            for _ in range(64):
+                with socket.socket() as endpoint:
+                    endpoint.bind(('127.0.0.1',0))
+                    port = endpoint.getsockname()[1]
+                if port not in claimed and port not in selected:
+                    selected.append(port)
+                if len(selected)==2:
+                    session.ports = tuple(selected)
+                    return session.ports
+            raise ValueError('Unable to allocate two local editor endpoints.')
+
+    def running(self, root):
+        with self.native.lock:
+            session = self.sessions.get(root)
+            return bool(session and session.process and session.process.poll() is None)
+
+    def session(self, root):
+        with self.native.lock:
+            if root not in self.sessions:
+                exe = pathlib.Path(self.native.config.get('native', {}).get('vroid_executable', ''))
+                marker = exe.parent/'BepInEx/plugins/toolkit-export.json'
+                try:
+                    isolated = json.loads(marker.read_text()).get('project_sessions') is True
+                except (OSError,ValueError):
+                    isolated = False
+                if isolated:
+                    directory = self.native.root/'vroid-sessions'/hashlib.sha256(str(root).encode()).hexdigest()
+                    self.sessions[root] = VroidControl(self.native, directory)
+                else:
+                    if self.legacy_owner not in (None,root):
+                        raise ValueError('Update the local VRoid export extension for simultaneous project editors.')
+                    self.legacy_owner = root
+                    self.sessions[root] = self.base
+            return self.sessions[root]
+
+    def call(self, project_id, operation, arguments=None):
+        if operation == 'status' and not arguments:
+            _, root = self.native.project(project_id)
+            with self.native.lock:
+                current = self.sessions.get(root)
+            if current and current.verified and current.process and current.process.poll() is None:
+                try:
+                    if current.session_id and current.rpc('ping',timeout=2).get('bridge_session') != current.session_id:
+                        raise ValueError('Project editor identity changed.')
+                    return current.filtered(current.rpc('tools/call',{'name':'status','arguments':{}},timeout=10))
+                except (OSError, ValueError):
+                    raise ValueError('Project editor status is unavailable.') from None
+        local_edit = operation == 'set_vrm_license'
+        with self.native.operation(project_id,None if local_edit else 'vroid') as (_,root):
+            session = VroidControl(self.native) if local_edit else self.session(root)
+            try:
+                return session.call(project_id,operation,arguments)
+            finally:
+                if not local_edit and session.process:
+                    self.native.capacity.track(('vroid',root,project_id),session.process)
+
+    def stop(self, project_id):
+        with self.native.operation(project_id) as (_,root):
+            with self.native.lock:
+                session = self.sessions.pop(root,None)
+                if session and session.process:
+                    session.process.stop()
+                    session.process.close()
+                    session.process = None
+                if self.legacy_owner == root:
+                    self.legacy_owner = None
+        return {'stopped':True}

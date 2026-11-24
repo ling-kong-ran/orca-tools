@@ -1,6 +1,6 @@
 import base64, importlib.util, io, json, pathlib, struct, tempfile, unittest, unittest.mock, zlib
 from native_control import NativeControl
-from native_vroid import clean_png
+from native_vroid import VroidControl, clean_png
 from test_native_vrm import container
 
 
@@ -15,7 +15,7 @@ class VroidTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name); self.project = self.root/'project'; self.project.mkdir()
         self.native = NativeControl({'data_dir': str(self.root), 'native': {'projects': [{'id': 'test', 'name': 'Test', 'enabled': True, 'root': str(self.project)}]}})
-        self.control = self.native.vroid
+        self.control = VroidControl(self.native)
 
     def test_project_paths_and_explicit_overwrite(self):
         file = self.project/'avatar.vroid'; file.write_bytes(b'character')

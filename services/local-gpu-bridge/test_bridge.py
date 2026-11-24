@@ -44,6 +44,7 @@ class Tests(unittest.TestCase):
         (self.root/'workflows/connection-test.json').write_text(json.dumps(self.workflow))
         self.config={'data_dir':str(self.root),'token':'a'*64,'allowed_peers':['127.0.0.1'],'listen':'127.0.0.1','max_active_jobs':8}
         self.adapter=FakeAdapter();self.bridge=Bridge(self.config,self.adapter)
+        self.bridge.native.capacity.probe=lambda:4
         self.server=Server(('127.0.0.1',0),make_handler(self.bridge));threading.Thread(target=self.server.serve_forever,daemon=True).start()
         self.url='http://127.0.0.1:'+str(self.server.server_port)
         self.client_config=self.root/'client.json';self.client_config.write_text(json.dumps({'url':self.url,'token':self.config['token']}))
@@ -157,6 +158,36 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.adapter.cancelled,[])
         self.adapter.states[job['prompt_id']]={'status':'queued'}
         self.assertEqual(self.client.call('cancel_pending_job',{'job_id':job['id']})['status'],'cancelled')
+    def test_projectless_workspaces_are_scoped_to_the_connection(self):
+        first=self.client.call('session_workspace',{})['project_id']
+        self.assertEqual(self.client.call('session_workspace',{})['project_id'],first)
+        other=client_module.Client(self.client_config)
+        self.assertNotEqual(other.call('session_workspace',{})['project_id'],first)
+        workspace=self.client.call('session_workspace',{'new':True})['project_id']
+        self.assertNotEqual(first,workspace)
+        self.assertIn('files',other.call('project_files',{'project_id':workspace}))
+        self.assertIn('files',self.client.call('project_files',{}))
+        self.assertNotIn('render_capacity',self.client.call('local_status',{}))
+        self.assertEqual(self.client.call('local_projects',{}),{'projects':[]})
+
+    def test_workflow_shares_render_capacity_and_freezes_only_its_project(self):
+        from render_capacity import RenderCapacity
+        native=self.bridge.native
+        native.capacity=RenderCapacity(2,probe=lambda:4)
+        ident=self.client.call('session_workspace',{})['project_id']
+        second=self.client.call('session_workspace',{'new':True})['project_id']
+        job=self.client.call('run_workflow',{'workflow_id':'connection-test','project_id':ident})
+        with self.assertRaisesRegex(ValueError,'in flight'):
+            with native.operation(ident,busy_timeout=0):pass
+        with native.operation(second,'godot'):
+            self.assertEqual(native.capacity.status()['in_use'],2)
+            with self.assertRaisesRegex(ValueError,'capacity'):
+                self.client.call('run_workflow',{'workflow_id':'connection-test'})
+        self.adapter.complete(self.bridge.jobs[job['id']]['prompt_id'])
+        self.assertEqual(self.bridge.inspect(job['id'])['status'],'succeeded')
+        with native.operation(ident,busy_timeout=0):
+            self.assertEqual(native.capacity.status()['in_use'],0)
+
     def test_upload_and_bad_file(self):
         file=self.root/'input.png';file.write_bytes(b'png')
         result=self.client.call('upload_input',{'path':str(file)});self.assertEqual(result['bytes'],3)
@@ -168,7 +199,7 @@ class Tests(unittest.TestCase):
                   {'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'gpu_status','arguments':{}}},
                   {'jsonrpc':'2.0','id':4,'method':'tools/call','params':{'name':'run_workflow','arguments':{'workflow_id':'connection-test','unexpected':'x'}}}]
         result=subprocess.run([sys.executable,str(pathlib.Path(__file__).parent/'plugin/client.py'),'--config',str(self.client_config)],input='\n'.join(json.dumps(m) for m in messages)+'\n',capture_output=True,text=True,timeout=15)
-        self.assertEqual(result.returncode,0,result.stderr);lines=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode,0,result.stderr);lines=sorted((json.loads(line) for line in result.stdout.splitlines()),key=lambda reply:reply['id'])
         self.assertEqual(len(lines),4);self.assertEqual(len(lines[1]['result']['tools']),8)
         self.assertFalse(lines[2]['result']['isError']);self.assertTrue(lines[3]['result']['isError'])
         self.assertNotIn(self.config['token'],result.stdout+result.stderr)

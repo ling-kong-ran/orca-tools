@@ -102,7 +102,8 @@ def preserve_scene_backups(root):
 
 
 class UnityControl:
-    def __init__(self, native):
+    def __init__(self, native, session_dir=None):
+        self.session_dir = session_dir
         self.native = native
         self.editor = None
         self.editor_project = None
@@ -122,7 +123,7 @@ class UnityControl:
         env = {k:v for k,v in os.environ.items() if not any(s in k.upper() for s in
             ('TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL', 'API_KEY', 'CLAUDE_', 'ORCA_'))}
         for key, folder in [('TEMP','temp'),('TMP','temp'),('UPM_CACHE_ROOT','upm'),('ASSETSTORE_CACHE_PATH','assets')]:
-            target = data / folder; target.mkdir(parents=True, exist_ok=True); env[key] = str(target)
+            target = (self.session_dir if folder=='temp' and self.session_dir else data) / folder; target.mkdir(parents=True, exist_ok=True); env[key] = str(target)
         env.update(TZ='UTC', UNITY_NO_CONSENT_PROMPT='1', UNITY_NO_CRASH_REPORT='1',
             UNITY_NO_AGENT_HINTS='1', UNITY_NO_AUTH_BROKER='1', UNITY_NO_EDITOR_IDENTITY_SERVER='1')
         env.pop('UNITY_MCP_DESKTOP_FALLBACK', None)
@@ -221,8 +222,11 @@ class UnityControl:
             with startup_lock(root):
                 if project.get('git',{}).get('enabled') and project['git'].get('auto_pull_before_render'):
                     from native_git import git_for
-                    git_for(self.native, project, root).pull(uuid.uuid4().hex)
-            log = pathlib.Path(self.settings().get('unity_data_dir') or self.native.root/'unity')/'editor.log'
+                    _, repository = self.native.project(project_id)
+                    git_for(self.native, project, repository).pull(uuid.uuid4().hex)
+                    # Revalidate the editor directory after updating a nested project.
+                    self.project(project_id)
+            log = (self.session_dir or pathlib.Path(self.settings().get('unity_data_dir') or self.native.root/'unity'))/'editor.log'
             log.parent.mkdir(parents=True, exist_ok=True)
             recovered = preserve_scene_backups(root)
             # Unity needs shader/compiler/package-manager children. The parent and
@@ -260,16 +264,21 @@ class UnityControl:
                 slot = self.pending.get(reply.get('id'))
                 if slot: slot['value'] = reply; slot['event'].set()
         finally:
-            for slot in list(self.pending.values()): slot['event'].set()
+            for slot in list(self.pending.values()):
+                if slot['process'] is process: slot['event'].set()
 
     def _send(self, method, params=None, notify=False):
         with self.write_lock:
             self.next_id += 1; ident = self.next_id
-            slot = {'event':threading.Event(),'value':None}
+            slot = {'event':threading.Event(),'value':None,'process':self.rpc_process}
             if not notify: self.pending[ident] = slot
             request = {'jsonrpc':'2.0','method':method,'params':params or {}}
             if not notify: request['id'] = ident
-            self.rpc_process.stdin.write((json.dumps(request)+'\n').encode()); self.rpc_process.stdin.flush()
+            try:
+                self.rpc_process.stdin.write((json.dumps(request)+'\n').encode()); self.rpc_process.stdin.flush()
+            except (OSError, ValueError):
+                self.pending.pop(ident,None)
+                raise
         if notify: return {}
         try:
             if not slot['event'].wait(180) or slot['value'] is None:
@@ -314,7 +323,12 @@ class UnityControl:
                              'inputSchema':{**entry['inputSchema'], 'properties':props}}
                 tools.append({k:entry[k] for k in ('name','description','inputSchema') if k in entry})
             self.pipeline_ready = any(entry['name'] != 'unity-cli-status' for entry in tools)
-            return {'tools':tools + QUALIFIED_TOOLS, 'ready':self.pipeline_ready}
+            exposed = tools + QUALIFIED_TOOLS
+            if project_id.startswith('scratch.'):
+                # Standalone workspaces may capture and inspect their editor without installing executable packages.
+                standalone = set(CAPTURE_PATHS) | {'console.get','console.status','test.list','unity-cli-status'}
+                exposed = [entry for entry in exposed if entry['name'] in standalone]
+            return {'tools':exposed, 'ready':self.pipeline_ready}
 
     def capture(self, project_id, name, arguments):
         project, root = self.project(project_id)
@@ -369,3 +383,57 @@ class UnityControl:
             except (OSError, BrokenPipeError):
                 logging.exception('Unity MCP transport stopped')
                 raise ValueError('Unity connection stopped. Inspect editor state; edits are never retried automatically.') from None
+
+
+class UnityProjects:
+    def __init__(self, native):
+        self.native = native
+        self.base = UnityControl(native)
+        self.sessions = {}
+
+    def session(self, ident):
+        import hashlib
+        project, root = self.base.project(ident)
+        with self.native.lock:
+            if root not in self.sessions:
+                data = pathlib.Path(self.base.settings().get('unity_data_dir') or self.native.root/'unity')
+                directory = data/'projects'/hashlib.sha256(str(root).encode()).hexdigest()
+                self.sessions[root] = UnityControl(self.native, directory)
+            return self.sessions[root]
+
+    def status(self):
+        result = self.base.status()
+        with self.native.lock:
+            editors = [s for s in self.sessions.values() if s.editor and s.editor.poll() is None]
+            result.update(running=bool(editors), connected=any(s.pipeline_ready and s.rpc_process
+                          and s.rpc_process.poll() is None for s in editors))
+        return result
+
+    def editor_state(self, project_id):
+        return self.session(project_id).editor_state(project_id)
+
+    def dispatch(self, project_id, method, *args):
+        launching = method in ('start','recover')
+        with self.native.operation(project_id,'unity' if launching else None,
+                                   busy_timeout=2 if method=='recover' else 180) as (_,root):
+            session = self.session(project_id)
+            try:
+                return getattr(session,method)(project_id,*args)
+            finally:
+                if launching and session.editor_project == project_id and session.editor is not None:
+                    self.native.capacity.track(('unity',root,project_id),session.editor)
+
+    def start(self, project_id):
+        return self.dispatch(project_id,'start')
+
+    def stop(self, project_id):
+        return self.dispatch(project_id,'stop')
+
+    def recover(self, project_id, discard_changes=False, request_id=None):
+        return self.dispatch(project_id,'recover',discard_changes,request_id)
+
+    def tools(self, project_id):
+        return self.dispatch(project_id,'tools')
+
+    def call(self, project_id, name, arguments=None):
+        return self.dispatch(project_id,'call',name,arguments)

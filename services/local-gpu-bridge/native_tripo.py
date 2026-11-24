@@ -351,23 +351,38 @@ class TripoControl:
         return env
 
     def _read(self, process):
-        for line in process.stdout:
-            try: value = json.loads(line)
-            except ValueError: continue
-            slot = self.pending.get(value.get('id'))
-            if slot: slot['value'] = value; slot['event'].set()
-        for slot in list(self.pending.values()): slot['event'].set()
+        try:
+            with process.stdout as stream:
+                for line in stream:
+                    try: value = json.loads(line)
+                    except ValueError: continue
+                    slot = self.pending.get(value.get('id'))
+                    if slot and slot['process'] is process:
+                        slot['value'] = value
+                        slot['event'].set()
+        finally:
+            for slot in list(self.pending.values()):
+                if slot['process'] is process:
+                    slot['event'].set()
 
-    def _send(self, method, params=None, timeout=120, notify=False):
+    def _send(self, method, params=None, timeout=120, notify=False, process=None):
         message = {'jsonrpc': '2.0', 'method': method}
         if params is not None: message['params'] = params
         with self.lock:
+            if process is None: process = self.process
+            if process is None or process is not self.process:
+                raise ValueError('Tripo session changed before the request was sent.')
             if notify:
-                self.process.stdin.write((json.dumps(message) + '\n').encode()); self.process.stdin.flush(); return None
+                process.stdin.write((json.dumps(message) + '\n').encode()); process.stdin.flush(); return None
             ident = self.next_id; self.next_id += 1
-            slot = {'event': threading.Event(), 'value': None}; self.pending[ident] = slot
+            slot = {'event': threading.Event(), 'value': None, 'process':process}; self.pending[ident] = slot
             message['id'] = ident
-            self.process.stdin.write((json.dumps(message) + '\n').encode()); self.process.stdin.flush()
+            try:
+                process.stdin.write((json.dumps(message) + '\n').encode())
+                process.stdin.flush()
+            except (OSError, ValueError):
+                self.pending.pop(ident,None)
+                raise
         try:
             if not slot['event'].wait(timeout) or slot['value'] is None:
                 raise ValueError('Tripo Studio did not answer in time. Query the workflow before repeating a submission.')
@@ -378,7 +393,10 @@ class TripoControl:
     def ensure_started(self):
         with self.start_lock:
             if self.login_active(): raise ValueError('Tripo Studio sign-in is in progress on the GPU computer. Try again after it finishes.')
-            if self.process is not None and self.process.poll() is None: return
+            if self.process is not None and self.process.poll() is None: return self.process
+            if self.process is not None:
+                self.close_process(self.process,5)
+                self.process = None
             if self.command: command, cwd = self.command, None
             else: command, cwd = ['node', './mcp/bootstrap.mjs'], str(self.runtime_root())
             # The bootstrap keeps the plugin's singleton backend (session, headless browser,
@@ -386,12 +404,12 @@ class TripoControl:
             self.process = subprocess.Popen(command, cwd=cwd, env=self.environment(), stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
             threading.Thread(target=self._read, args=(self.process,), daemon=True).start()
-            self._send('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
-                                      'clientInfo': {'name': 'local-gpu-bridge', 'version': '1'}}, timeout=60)
-            self._send('notifications/initialized', notify=True)
-            # tools/list is served by the lightweight bootstrap without starting
-            # its backend. A read is required to establish the lifetime lease.
             try:
+                self._send('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                                          'clientInfo': {'name': 'local-gpu-bridge', 'version': '1'}}, timeout=60)
+                self._send('notifications/initialized', notify=True)
+                # tools/list is served by the lightweight bootstrap without starting
+                # its backend. A read is required to establish the lifetime lease.
                 ready = self._send('tools/call', {'name': 'tripo_get_status', 'arguments': {}}, timeout=60)
                 if ready.get('isError') and any(
                     any(s in str(item.get('text','')) for s in ('MCP service is unavailable','MCP version mismatch','could not connect to its local backend'))
@@ -399,18 +417,27 @@ class TripoControl:
                     raise ValueError('Tripo Studio backend did not become ready. Check the local service log.')
             except Exception:
                 process, self.process = self.process, None
-                try: process.stdin.close(); process.wait(5)
-                except (OSError, subprocess.TimeoutExpired): process.kill()
+                self.close_process(process,5)
                 raise
 
-    def stop(self):
+            return self.process
+
+    def stop(self, expected=None):
         with self.start_lock:
+            if expected is not None and self.process is not expected:
+                return
             process, self.process = self.process, None
-            if process is None or process.poll() is not None: return
-            try: process.stdin.close()
-            except OSError: pass
-            try: process.wait(15)
-            except subprocess.TimeoutExpired: process.kill()
+            if process is not None:
+                self.close_process(process,15)
+
+    @staticmethod
+    def close_process(process,timeout):
+        try: process.stdin.close()
+        except OSError: pass
+        try: process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout)
 
     def to_local(self, value):
         if isinstance(value, str):
@@ -491,7 +518,8 @@ class TripoControl:
         try:
             self.ensure_started()
             tools = [english_tool(t) for t in self._send('tools/list').get('tools', []) if t.get('name') not in HIDDEN]
-            self.runtime_dir.mkdir(parents=True, exist_ok=True); cache.write_text(json.dumps(tools), encoding='utf-8')
+            from native_control import atomic
+            atomic(cache,tools)
         except ValueError:
             try: tools = [english_tool(t) for t in json.loads(cache.read_text(encoding='utf-8')) if t.get('name') not in HIDDEN]
             except (OSError, ValueError): raise ValueError('Tripo Studio is not available on the GPU computer yet.') from None
@@ -503,12 +531,12 @@ class TripoControl:
             raise ValueError('This Tripo tool is not exposed to the VPS.')
         arguments = arguments or {}
         if not isinstance(arguments, dict) or len(json.dumps(arguments)) > 65536: raise ValueError('Tripo arguments must be an object under 64 KB.')
-        result = self._call(name, arguments)
+        process,result = self._call(name, arguments)
         if backend_gone(result):
             # The backend stopped under a live bootstrap (a login, an update): start a fresh one.
             # Only reads are repeated; a submission is reported so it is never sent twice.
-            self.stop()
-            if name.startswith(('tripo_get_', 'tripo_list_')): result = self._call(name, arguments)
+            self.stop(expected=process)
+            if name.startswith(('tripo_get_', 'tripo_list_')): _,result = self._call(name, arguments)
         if name == 'tripo_get_workflow_capabilities': result = english_capabilities(result)
         if name == 'tripo_get_status': result = self.necessary_status(result)
         return self.public_times(json.loads(self.to_handles(json.dumps(result, ensure_ascii=False))))
@@ -538,8 +566,8 @@ class TripoControl:
         return result
 
     def _call(self, name, arguments):
-        self.ensure_started()
-        try: return self._send('tools/call', {'name': name, 'arguments': self.to_local(arguments)}, timeout=600)
+        process = self.ensure_started()
+        try: return process,self._send('tools/call', {'name': name, 'arguments': self.to_local(arguments)}, timeout=600,process=process)
         except ValueError: raise
         except Exception:
             logging.exception('Tripo call failed')

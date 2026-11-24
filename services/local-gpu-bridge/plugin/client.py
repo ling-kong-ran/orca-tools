@@ -44,6 +44,10 @@ def download_receipt(target, size, checksum):
             'saved_at': saved.isoformat(), 'timezone': str(saved.tzinfo),
             'timestamp_source': 'receiver'}
 
+# Required workspace arguments become optional at the MCP boundary. Git and trusted
+# project scripts have no meaningful target until the owner registers a repository.
+STANDALONE_TOOLS = set()
+
 def user_home():
     # Orca gives each Claude account a separate HOME. Bridge config belongs to the OS user.
     try:
@@ -55,6 +59,10 @@ def schema(properties=None, required=None):
     return {'type': 'object', 'properties': properties or {}, 'required': required or [], 'additionalProperties': False}
 
 def tool(name, description, properties=None, required=None, readonly=True):
+    if 'project_id' in (required or []) and name not in ('project_git','run_project_script'):
+        STANDALONE_TOOLS.add(name)
+        required = [field for field in required or [] if field != 'project_id']
+        description += ' Omit project_id to use this MCP session’s private workspace.'
     return {'name': name, 'description': description, 'inputSchema': schema(properties, required),
             'annotations': {'readOnlyHint': readonly, 'destructiveHint': False, 'openWorldHint': False}}
 
@@ -63,7 +71,7 @@ TOOLS = [
     tool('gpu_status', 'Check worker availability and queue counts. Does not return IP addresses, hostnames, hardware models, memory sizes or software versions.'),
     tool('list_workflows', 'List saved local ComfyUI workflows and imported workflows, availability, required asset parameters, and editable parameter types and bounds. Saved workflows are discovered automatically.'),
     tool('run_workflow', 'Queue one approved local ComfyUI workflow. Returns a job id immediately. Only exposed parameters can change. Reuse request_id to recover an uncertain submission without duplicating it.',
-         {'workflow_id': STR, 'parameters': {'type': 'object'}, 'request_id': {'type': 'string', 'pattern': '^[a-f0-9]{32}$'}}, ['workflow_id'], False),
+         {'workflow_id': STR, 'project_id':STR, 'parameters': {'type': 'object'}, 'request_id': {'type': 'string', 'pattern': '^[a-f0-9]{32}$'}}, ['workflow_id'], False),
     tool('list_jobs', 'List the last 100 jobs created through this bridge.'),
     tool('job_status', 'Refresh a bridge job and list the artifacts produced by that job.', {'job_id': STR}, ['job_id']),
     tool('cancel_pending_job', 'Cancel only this bridge job if it is still queued. Running jobs are not interrupted.', {'job_id': STR}, ['job_id'], False),
@@ -104,6 +112,10 @@ VROID_TOOLS = NATIVE_COMMON[:5] + [t for t in NATIVE_COMMON if t['name'] in ('pr
     tool('vroid_operation','Control local VRoid Studio: create/open characters, face/body/hair/outfit presets, sliders and colors, camera, preview-only screenshots, save .vroid, and export_vrm. export_vrm requires {path: project-relative .vrm, title, author, format:1.0|0.0 (default 1.0), replace?:boolean}; it exports the current character without a dialog and returns to editing. Metadata has restrictive license defaults and no saved local contact details. Fetch with download_project_file, or use Blender import_asset. First read vroid_tools for the current server operation allowlist; use help for details. If an older session rejects export_vrm, call operation=save with exactly the same .vrm path/title/author/format/replace arguments; this is the same exporter, with no session restart. state reports editor_connected, model_ready and phase: awaiting_model means the editor is running WITHOUT an open character. Call create or open next; waiting cannot load a character. open/save paths are relative to an approved project. save requires path; replace=true allows overwrite. main_menu requires discard_changes=true after saving. screenshot/previews only mode=inline. Text metadata is filtered; images contain only the model preview. No shell, raw commands or whole-window screenshots. A timed-out edit may still be running: query status before repeating.',
          {'project_id':STR,'operation':STR,'arguments':{'type':'object'}},['project_id','operation'],False)
 ]
+
+STOP_ARGS = {'project_id':STR,'discard_changes':{'type':'boolean'}}
+BLENDER_TOOLS.append(tool('blender_stop','Stop this project editor after saving wanted changes.',STOP_ARGS,['project_id','discard_changes'],False))
+VROID_TOOLS.append(tool('vroid_stop','Stop this project editor after saving wanted changes.',STOP_ARGS,['project_id','discard_changes'],False))
 
 # tripo-local lists the GPU computer's Tripo Studio tools at run time; these two move files.
 TRIPO_FILE_TOOLS = [
@@ -172,6 +184,9 @@ class NoCredentialRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+for namespace in (GODOT_TOOLS,BLENDER_TOOLS,VROID_TOOLS,UNITY_TOOLS):
+    namespace.append(tool('session_workspace','Return this session workspace or allocate an independent workspace to run another task in parallel. Pass its project_id to any native tool.',{'new':{'type':'boolean'}},readonly=False))
+
 class Client:
     def __init__(self, config_path):
         config = json.loads(pathlib.Path(config_path).read_text(encoding='utf-8'))
@@ -184,6 +199,8 @@ class Client:
         if parsed.scheme not in ('http', 'https') or (host not in ipaddress.ip_network('100.64.0.0/10') and not host.is_loopback and not pinned_private) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
             raise ValueError('Bridge endpoint must be a loopback/Tailscale URL without credentials or a path.')
         if not isinstance(config.get('token'), str) or len(config['token']) < 32: raise ValueError('Invalid bridge credential.')
+        self.workspace_session = uuid.uuid4().hex
+        self.workspace_id = None
         self.base = config['url'].rstrip('/'); self.token = config['token']
         self.require_private_metadata = config.get('require_private_tailnet_metadata', False)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoCredentialRedirect())
@@ -266,6 +283,15 @@ class Client:
             return download_receipt(target, size, digest.hexdigest())
         finally: partial.unlink(missing_ok=True)
     def call(self, name, args):
+        if name=='session_workspace' and args.get('new') is True:
+            return self.request('/v1/native/workspace',{'session_id':uuid.uuid4().hex})
+        if name=='session_workspace' or (name in STANDALONE_TOOLS and 'project_id' not in args):
+            if self.workspace_id is None:
+                self.workspace_id = self.request('/v1/native/workspace',{'session_id':self.workspace_session})['project_id']
+            if name=='session_workspace':return {'project_id':self.workspace_id}
+            args={**args,'project_id':self.workspace_id}
+        if name in ('blender_stop','vroid_stop'):
+            return self.request('/v1/native/stop-editor',{'engine':name.split('_')[0],**args})
         if name=='unity_editor_state':return self.request('/v1/unity/editor-state',args)
         if name=='unity_recover':
             body=dict(args);body.setdefault('request_id',uuid.uuid4().hex)
@@ -396,18 +422,27 @@ def check_args(definition, args):
 
 def serve(client,tools=None):
     tools=TOOLS if tools is None else tools
-    for raw in sys.stdin.buffer:
+    import threading
+    writes = threading.Lock()
+    available = threading.Condition()
+    running = set()
+
+    def reply(message):
+        with writes:
+            print(json.dumps(message,ensure_ascii=False),flush=True)
+
+    def handle(raw):
         request = None
         try:
             if len(raw) > 1024*1024: raise ValueError('MCP message is too large.')
             request = json.loads(raw)
             if not isinstance(request, dict): raise ValueError('Expected a JSON-RPC object.')
             ident = request.get('id'); method = request.get('method'); params = request.get('params') or {}
-            if 'id' not in request: continue
+            if 'id' not in request: return
             if method == 'initialize':
                 version = params.get('protocolVersion')
                 if version not in ('2024-11-05','2025-03-26','2025-06-18'): version='2025-03-26'
-                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.10.1'},
+                result = {'protocolVersion':version,'capabilities':{'tools':{}},'serverInfo':{'name':'local-gpu','version':'1.11.0'},
                           'instructions':'Use only listed workflows/projects and exposed tools. Native development stays on the VPS: commit and push on the VPS, then use project_git pull or automatic Git update before rendering. Git is the only project synchronization method; local tracked edits are disposable and discarded without backup before reset. Project GDScript and Blender Python are available when allow_scripts is enabled. No generic shell is exposed. Run native rendering only after network isolation is ready. Scripts run with local user file access; do not query host identity or network metadata. Poll job status with reasonable delays. Do not interrupt unrelated local jobs.'}
             elif method == 'ping': result = {}
             elif method == 'tools/list': result = {'tools': tools() if callable(tools) else tools}
@@ -429,11 +464,29 @@ def serve(client,tools=None):
                 except Exception as error:
                     result = {'content':[{'type':'text','text':str(error)[:2400]}], 'isError':True}
             else:
-                print(json.dumps({'jsonrpc':'2.0','id':ident,'error':{'code':-32601,'message':'Method not found'}}),flush=True); continue
-            print(json.dumps({'jsonrpc':'2.0','id':ident,'result':result},ensure_ascii=False),flush=True)
+                reply({'jsonrpc':'2.0','id':ident,'error':{'code':-32601,'message':'Method not found'}}); return
+            reply({'jsonrpc':'2.0','id':ident,'result':result})
         except Exception:
             ident = request.get('id') if isinstance(request,dict) else None
-            print(json.dumps({'jsonrpc':'2.0','id':ident,'error':{'code':-32600,'message':'Invalid request'}}),flush=True)
+            reply({'jsonrpc':'2.0','id':ident,'error':{'code':-32600,'message':'Invalid request'}})
+
+    def worker(raw):
+        try:
+            handle(raw)
+        finally:
+            with available:
+                running.discard(threading.current_thread())
+                available.notify_all()
+
+    for raw in sys.stdin.buffer:
+        with available:
+            available.wait_for(lambda:len(running)<32)
+            thread = threading.Thread(target=worker,args=(raw,),name='mcp-request')
+            running.add(thread)
+            thread.start()
+    with available:
+        available.wait_for(lambda:not running)
+
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--config',default=str(user_home()/'.config/local-gpu-bridge/client.json'));parser.add_argument('--self-test',action='store_true');parser.add_argument('--namespace',choices=['comfyui','godot','blender','vroid','tripo','unity'],default='comfyui');args=parser.parse_args()

@@ -29,6 +29,10 @@ def patch_source(source):
                 ["title"] = P("string", "Model title."), ["author"] = P("string", "Author name."), ["replace"] = P("boolean", "Allow overwrite.") }),
 
             T("sections",''')
+    replace_once(project/'Runtime/ServerSettings.cs',
+                 'FilePath => Path.Combine', 'FilePath => Environment.GetEnvironmentVariable("VROID_SESSION_SETTINGS") ?? Path.Combine')
+    replace_once(project/'MCP/McpHost.cs', 'var info = new Dictionary<string, object>();',
+                 'var info = new Dictionary<string, object>();\n            info["bridge_session"] = System.Environment.GetEnvironmentVariable("VROID_SESSION_ID") ?? "";')
     return project
 
 
@@ -96,9 +100,9 @@ def main():
             if target.exists() and not backup.exists(): shutil.copy2(target, backup)
             staging = target.with_suffix('.dll.installing'); shutil.copy2(binary, staging); staging.replace(target)
             shutil.copy2(binary.with_suffix('.upstream-LICENSE.txt'), target.with_suffix('.upstream-LICENSE.txt'))
-            (target.parent/'toolkit-export.json').write_text(json.dumps({'version': '1.6.0', 'upstream': REVISION,
+            (target.parent/'toolkit-export.json').write_text(json.dumps({'version': '1.7.0', 'project_sessions': True, 'upstream': REVISION,
                 'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}), encoding='utf-8')
-    print(json.dumps({'built': True, 'installed': not bool(args.build_only), 'version': '1.6.0',
+    print(json.dumps({'built': True, 'installed': not bool(args.build_only), 'version': '1.7.0', 'project_sessions': True,
                       'next': 'Start managed Studio through the bridge, then reload the VPS plugin.'}))
 
 

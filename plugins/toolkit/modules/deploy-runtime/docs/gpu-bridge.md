@@ -33,13 +33,15 @@ python scripts/install-local-gpu.py --settings scripts/gpu-settings.local.json
 | --- | --- |
 | `listen` | 本机 Tailscale IPv4 |
 | `allowed_peers` | 允许调用服务的 VPS Tailscale IPv4 列表 |
-| `comfy_startup` | 可选 ComfyUI 自启：enabled、root、python；可配置 input_directory、output_directory、model_paths_config |
+| `comfy_startup` | ComfyUI 自启使用 `enabled`、`root`、`python`。可用 `input_directory`、`output_directory`、`model_paths_config` 指定目录和模型配置。 |
 | `workflow_dirs` | 本机 ComfyUI 保存工作流的实际目录，支持多个 |
 | `native.godot_executable` | 普通 Godot exe 的完整路径 |
 | `native.blender_executable` | 普通 Blender exe 的完整路径 |
 | `native.projects[].root` | 已克隆的本机渲染副本根目录 |
 | `git.remote / git.branch` | 本机已有 remote 名称与远程分支，默认 origin/main |
 | `allow_scripts` | 是否允许项目 GDScript / Blender Python；仅对可信项目开启 |
+
+如果 Windows 上的 GPU 工作流反复执行后累积大量 OpenMP 工作线程，可在 `comfy_startup` 中设置 `"cpu_threads": 1`。启动器在 ComfyUI 进程启动前设置 `OMP_NUM_THREADS` 和 `MKL_NUM_THREADS`。省略此项时继承原环境。修改后在队列空闲时重启 ComfyUI 生效。CPU 密集型节点可能变慢。
 
 只用 ComfyUI 时，可以将 `native` 设为 `{"projects":[]}`；只用一种原生渲染器时删除另一种的 executable 字段。不需要 GPU 程序的安装包加入仓库。
 
@@ -137,6 +139,28 @@ Godot/Blender 普通渲染不依赖 Go。针对本项目图库中的游戏服务
 
 若日志提示 `module lookup disabled by GOPROXY=off`，先检查受管构建的模块缓存是否与正常终端一致。GOENV=off 会隐藏通过 go env -w 保存的缓存位置，即使依赖已经下载，也可能查错目录。
 
+## 项目媒体剪辑工具
+
+Godot 的 `run_project_script` 可为本机批准的项目调用 Python、Node、FFmpeg 和 ffprobe；Python/Node 只接收项目内的脚本文件，不暴露 `-c`、`-e` 或任意 shell。Python 的后续编码和 Chromium 子进程随任务一起受管，超时会清理整个进程树。项目必须同时开启 `allow_scripts` 并列入本机 `media_tools.project_ids`。这仍是可信项目代码执行能力，不是文件系统沙箱。
+
+本机先安装 Python 3.10+（含 Pillow）、Node 18+、FFmpeg full（检查 `libx264`、`minterpolate`、`loudnorm`），再在项目的动态字卡目录执行 `npm install`。将 `PLAYWRIGHT_BROWSERS_PATH` 设为专用磁盘上的 `LocalGpuMedia/playwright` 后，执行 `npx playwright-core install chromium-headless-shell`。
+
+在本仓库运行安装脚本，`--chromium` 使用刚下载的实际路径：
+
+```powershell
+python scripts/install-media-tools.py --root E:/tools/LocalGpuMedia --project okgame --chromium E:/tools/LocalGpuMedia/playwright/<revision>/<platform>/chrome-headless-shell.exe --stage-config
+```
+
+安装器复制 Python、Node、FFmpeg、ffprobe 到专用目录，不修改正常程序；将配置写到 Bridge 数据目录的 `native/media-tools.json`。`--stage-config` 不重启正在运行的 Bridge，下次启动才加载。部署服务文件后执行 `Setup-Native-Privacy.ps1` 并完成管理员确认：只给专用副本和 Chromium 增加外网阻断规则，保留 loopback/Tailscale。所有五项隔离检查通过后才允许运行。
+
+VPS 仍使用已有的 `run_project_script`，例如：
+
+```json
+{"project_id":"okgame","script":"tools/mv_cut_gpu.gd","user_args":["podfall_trailer","--lang=en"],"headless":true,"timeout_seconds":7200,"output_paths":["docs/promo/redo"]}
+```
+
+返回任务 ID 后使用 `wait_native_job` 查询；完成后 `fetch_native_artifact` 下载产物。新增收集格式包括 MP4、WebM、WAV、OGG。媒体子进程失败会使任务失败，不能只看外层 Godot 的退出码。先验证短片，再顺序渲染长片；完整成片尚需按项目素材与脚本实测。
+
 ## VRoid Studio
 
 See [VRoid deployment and operations](vroid.md) for the optional managed Studio adapter. It shares this bridge and Toolkit entry; do not install a separate Orca plugin.
@@ -167,3 +191,14 @@ See [VRoid deployment and operations](vroid.md) for the optional managed Studio 
 Claude 若反复创建 Bash 后台 `sleep` 等待命令，这些命令并不查询渲染进度；之后清理它们会产生退出码 143（被 SIGTERM 终止）的通知。不能据此判断 Blender 失败，应查看 native_job_status 和实际产物。
 
 使用 `wait_native_job(job_id, max_wait_seconds=15)`，单次最多 25 秒，期间只查询同一个任务；到期仍未完成时返回 waiting=true 和最后状态，不创建后台进程、不终止或重提渲染。按返回提示继续调用同一个 job_id。已有后台等待的历史通知不会被该工具删除。本次客户端更新兼容现有 `/v1/native/jobs/{id}` 接口，不需要重启本机 Bridge；VPS Claude 重新加载插件或新开会话后可发现新工具。
+
+
+## 多项目并行与无项目调用
+
+在本机 Orca Toolkit 的「项目管理 → 渲染并发上限」设置 1–32，默认 2。页面同时显示已占用数量和当前可用总上限。Bridge 根据 Windows 可用物理内存、提交余量和可读取的显存余量调整新任务的启动数量。调低上限后，已经打开的编辑器和正在运行的任务可以继续完成。硬件采样只在本机使用。
+
+- Unity、Blender 和 VRoid 分别为每个工作区保留编辑器。完成并保存后，用 `unity_stop`、`blender_stop` 或 `vroid_stop` 释放名额。后两者需要显式传入 `discard_changes=true`。旧版 VRoid 扩展支持单个编辑器，多项目端口隔离需要在关闭受管 VRoid 后运行 `python scripts/install-vroid-export.py`。
+- 不同项目的编辑、截图、脚本、Git 和解压可以并行。同一工作区的修改串行。Godot 和 Blender 的后台任务可以排队；同步启动编辑器遇到容量不足会提示稍后重试。进度、取消和 Unity 健康查询可以在任务进行时调用。
+- 直接调用 `capture_scene`、`blender_operation`、`vroid_operation` 或 `unity_start` 时可以省略 `project_id`。Bridge 为当前 MCP 连接创建独立工作区，提供空白 Godot 场景和带 Pipeline 的 Unity 工程。调用 `session_workspace()` 可获得它的 ID，交给另一个工具连接接着做。并行做另一份独立任务时，调用 `session_workspace(new=true)`，再把返回的 ID 传给这份任务。工作区保存于 Bridge 数据目录的 `native/workspaces`。
+- 临时工作区支持文件读取、产物下载和解压到 `outputs/` 下的新目录。Unity 可做截图和诊断。Git 同步需要登记仓库，项目脚本需要在本机授权。
+- ComfyUI 的 `run_workflow` 可以直接调用，也可以传入 `project_id` 与该项目的操作互斥；已提交任务占用共享渲染名额。ComfyUI 实际执行几个工作流取决于它自己的执行器。Tripo 沿用其服务端工作流调度，无需登记本机仓库。

@@ -168,6 +168,31 @@ class ComfyAdapter:
         with self.opener.open(request, timeout=60) as response: value = json.load(response)
         return {'name': value['name'], 'subfolder': value.get('subfolder', ''), 'reference': '/'.join(filter(None, [value.get('subfolder'), value['name']]))}
 
+class WorkflowLease:
+    """Refresh backend ownership on demand without blocking the scheduler on HTTP."""
+    def __init__(self, bridge, job):
+        self.bridge = bridge
+        self.job = job
+        self.next_check = time.monotonic() + 2
+        self.checking = threading.Lock()
+
+    def poll(self):
+        if self.job['status'] not in ('queued','running','submitting'):
+            return 0
+        if self.job.get('prompt_id') and time.monotonic() >= self.next_check and self.checking.acquire(False):
+            threading.Thread(target=self.refresh,daemon=True).start()
+        return None
+
+    def refresh(self):
+        try:
+            self.bridge.inspect(self.job['id'])
+        except (OSError,ValueError):
+            pass
+        finally:
+            self.next_check = time.monotonic() + 2
+            self.checking.release()
+
+
 class Bridge:
     def __init__(self, config, adapter=None):
         self.config = config; self.root = pathlib.Path(config['data_dir'])
@@ -187,6 +212,15 @@ class Bridge:
                 job = json.loads(file.read_text(encoding='utf-8'))
                 if HEX.fullmatch(job['id']): self.jobs[job['id']] = job
             except (ValueError, KeyError): pass
+        for job in self.jobs.values():
+            if job.get('prompt_id') and job['status'] in ('queued','running'):
+                try: root = self.workflow_root(job.get('project_id'),job['id'])
+                except ValueError: root = ('workflow',job['id'])
+                self.native.capacity.track(('comfyui',root,job['id']),WorkflowLease(self,job),exclusive=True)
+
+    def workflow_root(self, project_id, job_id):
+        return self.native.project(project_id)[1] if project_id is not None else ('workflow',job_id)
+
     def workflows(self):
         values = []
         for file in sorted((self.root/'workflows').glob('*.json')):
@@ -213,58 +247,97 @@ class Bridge:
         request_id = body.get('request_id')
         if not isinstance(request_id, str) or not HEX.fullmatch(request_id): raise ValueError('A 32-character request_id is required.')
         parameters = body.get('parameters', {})
-        fingerprint = hashlib.sha256(json.dumps({'workflow_id': body.get('workflow_id'), 'parameters': parameters}, sort_keys=True).encode()).hexdigest()
+        identity = {'workflow_id': body.get('workflow_id'), 'parameters': parameters}
+        if body.get('project_id') is not None:
+            self.native.project(body['project_id'])
+            identity['project_id'] = body['project_id']
+        fingerprint = hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
+        # One request id represents one submission even across simultaneous MCP callers.
+        with self.native.capacity.operation(('workflow-request',request_id)):
+            return self._submit(body, request_id, parameters, fingerprint)
+
+    def _submit(self, body, request_id, parameters, fingerprint):
         with self.lock:
             existing = latest_attempt(self.jobs, request_id, fingerprint)
             if existing and existing['status'] != 'failed':
                 return self.public(existing)
-            workflow = next((w for w in self.workflows() if w['id'] == body.get('workflow_id')), None)
-            if not workflow: raise ValueError('Unknown workflow. List the current saved workflows first.')
-            if not workflow.get('available',True): raise ValueError(workflow.get('unavailable_reason','This workflow is currently unavailable.'))
-            missing = [key for key in workflow.get('required_parameters',[]) if key not in parameters]
-            if missing: raise ValueError('Provide these input asset parameters before running: '+', '.join(missing))
-            prompt = apply_parameters(workflow, parameters)
-            # Admission counts backend-active jobs; old finished jobs do not consume slots.
-            active = 0
-            for old in self.jobs.values():
-                if old['status'] in ('queued', 'running'):
-                    old.update(self.adapters[old['kind']].inspect(old['prompt_id'])); self.save(old)
-                if old['status'] in ('submitting', 'queued', 'running', 'unknown'): active += 1
-            if active >= self.config.get('max_active_jobs', 8): raise ValueError('Bridge job limit reached. Check existing jobs before submitting more.')
-            job = {'id': uuid.uuid4().hex, 'request_id': request_id, 'fingerprint': fingerprint,
-                   'workflow_id': workflow['id'], 'kind': 'comfyui.workflow', 'status': 'submitting',
-                   'created_at': time.time(), 'updated_at': time.time(), 'artifacts': []}
-            job.update(attempt_fields(existing))
-            self.jobs[job['id']] = job; self.save(job)
+            active_states = ('submitting', 'queued', 'running', 'unknown')
+            active = [j for j in self.jobs.values() if j['status'] in active_states]
+            maximum = self.config.get('max_active_jobs', 8)
+            refresh = [j['id'] for j in active if j.get('prompt_id')] if len(active)>=maximum else []
+        for ident in refresh:
+            self.inspect(ident)
+        workflow = next((w for w in self.workflows() if w['id'] == body.get('workflow_id')), None)
+        if not workflow: raise ValueError('Unknown workflow. List the current saved workflows first.')
+        if not workflow.get('available',True): raise ValueError(workflow.get('unavailable_reason','This workflow is currently unavailable.'))
+        missing = [key for key in workflow.get('required_parameters',[]) if key not in parameters]
+        if missing: raise ValueError('Provide these input asset parameters before running: '+', '.join(missing))
+        prompt = apply_parameters(workflow, parameters)
+        ident = uuid.uuid4().hex
+        project_id = body.get('project_id')
+        root = self.workflow_root(project_id,ident)
+        key = ('comfyui',root,ident)
+        with self.native.capacity.operation(root,key,busy_timeout=0):
+            if self.workflow_root(project_id,ident) != root:
+                raise ValueError('Project location changed while waiting.')
+            with self.lock:
+                if sum(j['status'] in active_states for j in self.jobs.values()) >= maximum:
+                    raise ValueError('Bridge job limit reached. Check existing jobs before submitting more.')
+                job = {'id': ident, 'request_id': request_id, 'fingerprint': fingerprint,
+                       'workflow_id': workflow['id'], 'kind': 'comfyui.workflow', 'status': 'submitting',
+                       'created_at': time.time(), 'updated_at': time.time(), 'artifacts': []}
+                if project_id is not None:
+                    job['project_id'] = project_id
+                job.update(attempt_fields(existing))
+                self.jobs[job['id']] = job; self.save(job)
             try:
-                job['prompt_id'] = self.adapters[job['kind']].submit(prompt, 'local-gpu-bridge-' + job['id'])
-                job['status'] = 'queued'; self.save(job)
+                prompt_id = self.adapters[job['kind']].submit(prompt, 'local-gpu-bridge-' + job['id'])
             except Exception:
-                job['status'] = 'unknown'; job['message'] = 'Submission was not acknowledged. Check the local queue before retrying.'; self.save(job)
+                with self.lock:
+                    job.update(status='unknown',message='Submission was not acknowledged. Check the local queue before retrying.')
+                    self.save(job)
                 raise
-            return self.public(job)
+            with self.lock:
+                job.update(prompt_id=prompt_id,status='queued')
+                self.save(job)
+                self.native.capacity.track(key,WorkflowLease(self,job),exclusive=True)
+                return self.public(job)
     def inspect(self, ident):
+        with self.native.capacity.operation(('workflow-job',ident)):
+            return self._inspect(ident)
+
+    def _inspect(self, ident):
         with self.lock:
             if ident not in self.jobs: raise ValueError('Unknown bridge job.')
             job = self.jobs[ident]
-            if job['status'] not in ('succeeded', 'failed', 'cancelled') and job.get('prompt_id'):
-                job.update(self.adapters[job['kind']].inspect(job['prompt_id'])); self.save(job)
-            elif job['status']=='succeeded' and not job.get('artifacts') and job.get('prompt_id'):
-                # Repair old successful records whose Windows output paths were
-                # discarded. Never resubmit or downgrade a cached success.
-                try: recovered=self.adapters[job['kind']].inspect(job['prompt_id'])
-                except ValueError: recovered=None
-                if recovered and recovered.get('status')=='succeeded' and recovered.get('artifacts'):
-                    job.update(recovered);self.save(job)
-            return self.public(job)
-    def cancel(self, ident):
+            prompt_id = job.get('prompt_id')
+            if not prompt_id: return self.public(job)
+            recover = job['status']=='succeeded' and not job.get('artifacts')
+            if job['status'] in ('succeeded','failed','cancelled') and not recover:
+                return self.public(job)
+        try:
+            update = self.adapters[job['kind']].inspect(prompt_id)
+        except ValueError:
+            if not recover: raise
+            update = {}
         with self.lock:
-            self.inspect(ident); job = self.jobs[ident]
+            if not recover or (update.get('status')=='succeeded' and update.get('artifacts')):
+                job.update(update)
+                self.save(job)
+            return self.public(job)
+
+    def cancel(self, ident):
+        with self.native.capacity.operation(('workflow-job',ident)):
+            self._inspect(ident)
+            job = self.jobs[ident]
             if job['status'] == 'queued' and self.adapters[job['kind']].cancel_pending(job['prompt_id']):
                 latest = self.adapters[job['kind']].inspect(job['prompt_id'])
-                if latest['status'] == 'unknown': job['status'] = 'cancelled'; self.save(job)
+                if latest['status'] == 'unknown':
+                    with self.lock:
+                        job['status'] = 'cancelled'
+                        self.save(job)
             elif job['status'] == 'running': raise ValueError('Running jobs cannot be interrupted through this bridge.')
-            return self.inspect(ident)
+            return self._inspect(ident)
 
 def make_handler(bridge):
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -309,6 +382,15 @@ def make_handler(bridge):
                 if self.command == 'GET' and route == '/v1/workflows': return self.send_json(200, {'workflows': bridge.catalog()})
                 if route.startswith('/v1/native'):
                     native=bridge.native
+                    if self.command=='POST' and route=='/v1/native/workspace':return self.send_json(200,native.workspace(**self.body()))
+                    if self.command=='POST' and route=='/v1/native/stop-editor':
+                        body=self.body()
+                        if body.get('discard_changes') is not True:raise ValueError('Save edits first, then confirm discard_changes=true.')
+                        ident=body.get('project_id')
+                        native.project(ident)
+                        if body.get('engine')=='blender':return self.send_json(200,native.stop_blender(ident))
+                        if body.get('engine')=='vroid':return self.send_json(200,native.vroid.stop(ident))
+                        raise ValueError('Unknown editor.')
                     if self.command=='GET' and route=='/v1/native/status':return self.send_json(200,native.status())
                     if self.command=='GET' and route=='/v1/native/projects':return self.send_json(200,{'projects':native.projects()})
                     if self.command=='POST' and route=='/v1/native/git':return self.send_json(200,native.project_git(**self.body()))

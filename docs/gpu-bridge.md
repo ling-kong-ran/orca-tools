@@ -191,3 +191,14 @@ See [VRoid deployment and operations](vroid.md) for the optional managed Studio 
 Claude 若反复创建 Bash 后台 `sleep` 等待命令，这些命令并不查询渲染进度；之后清理它们会产生退出码 143（被 SIGTERM 终止）的通知。不能据此判断 Blender 失败，应查看 native_job_status 和实际产物。
 
 使用 `wait_native_job(job_id, max_wait_seconds=15)`，单次最多 25 秒，期间只查询同一个任务；到期仍未完成时返回 waiting=true 和最后状态，不创建后台进程、不终止或重提渲染。按返回提示继续调用同一个 job_id。已有后台等待的历史通知不会被该工具删除。本次客户端更新兼容现有 `/v1/native/jobs/{id}` 接口，不需要重启本机 Bridge；VPS Claude 重新加载插件或新开会话后可发现新工具。
+
+
+## 多项目并行与无项目调用
+
+在本机 Orca Toolkit 的「项目管理 → 渲染并发上限」设置 1–32，默认 2。页面同时显示已占用数量和当前可用总上限。Bridge 根据 Windows 可用物理内存、提交余量和可读取的显存余量调整新任务的启动数量。调低上限后，已经打开的编辑器和正在运行的任务可以继续完成。硬件采样只在本机使用。
+
+- Unity、Blender 和 VRoid 分别为每个工作区保留编辑器。完成并保存后，用 `unity_stop`、`blender_stop` 或 `vroid_stop` 释放名额。后两者需要显式传入 `discard_changes=true`。旧版 VRoid 扩展支持单个编辑器，多项目端口隔离需要在关闭受管 VRoid 后运行 `python scripts/install-vroid-export.py`。
+- 不同项目的编辑、截图、脚本、Git 和解压可以并行。同一工作区的修改串行。Godot 和 Blender 的后台任务可以排队；同步启动编辑器遇到容量不足会提示稍后重试。进度、取消和 Unity 健康查询可以在任务进行时调用。
+- 直接调用 `capture_scene`、`blender_operation`、`vroid_operation` 或 `unity_start` 时可以省略 `project_id`。Bridge 为当前 MCP 连接创建独立工作区，提供空白 Godot 场景和带 Pipeline 的 Unity 工程。调用 `session_workspace()` 可获得它的 ID，交给另一个工具连接接着做。并行做另一份独立任务时，调用 `session_workspace(new=true)`，再把返回的 ID 传给这份任务。工作区保存于 Bridge 数据目录的 `native/workspaces`。
+- 临时工作区支持文件读取、产物下载和解压到 `outputs/` 下的新目录。Unity 可做截图和诊断。Git 同步需要登记仓库，项目脚本需要在本机授权。
+- ComfyUI 的 `run_workflow` 可以直接调用，也可以传入 `project_id` 与该项目的操作互斥；已提交任务占用共享渲染名额。ComfyUI 实际执行几个工作流取决于它自己的执行器。Tripo 沿用其服务端工作流调度，无需登记本机仓库。

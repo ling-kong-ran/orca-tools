@@ -1,5 +1,7 @@
 """Project-scoped synchronization and typed native MCP operations; no shell API."""
 import base64,copy,hashlib,ipaddress,json,math,os,pathlib,re,shutil,socket,subprocess,threading,time,uuid
+from contextlib import contextmanager
+from render_capacity import RenderCapacity
 from native_process import EgressGuard,ManagedProcess
 from remote_privacy import remote_json, remote_text
 
@@ -70,12 +72,14 @@ class NativeControl:
         if media_settings.is_file():
             config.setdefault('native',{})['media_tools']=json.loads(media_settings.read_text(encoding='utf-8'))
         self.save_config=save_config;self.guard=guard or EgressGuard(config.get('native',{}));self.process_factory=process_factory
-        self.lock=threading.RLock();self.execute_lock=threading.Lock();self.archive_lock=threading.Lock();self.blender=None;self.blender_project=None
+        self.lock = threading.RLock()
+        self.capacity = RenderCapacity(config.get('native', {}).get('render_concurrency', 2))
+        self.blenders = {}
         self.jobs={};self.plans={}
-        from native_vroid import VroidControl
-        self.vroid=VroidControl(self)
-        from native_unity import UnityControl
-        self.unity=UnityControl(self)
+        from native_vroid import VroidProjects
+        self.vroid=VroidProjects(self)
+        from native_unity import UnityProjects
+        self.unity=UnityProjects(self)
         self.privacy_setup={'status':'idle'}
         for f in (self.root/'jobs').glob('*.json'):
             try:
@@ -88,7 +92,11 @@ class NativeControl:
             except (ValueError,KeyError):pass
     def projects(self,local=False):
         values=[]
-        for p in self.config.get('native',{}).get('projects',[]):
+        entries=list(self.config.get('native',{}).get('projects',[]))
+        if local:
+            entries += [self.project(root.name)[0] for root in (self.root/'workspaces').glob('scratch.*')
+                        if re.fullmatch(r'scratch\.[a-f0-9]{32}',root.name) and (root/'ready').is_file()]
+        for p in entries:
             row={k:p[k] for k in ('id','name','enabled')}
             row['sync_policy']=p.get('sync_policy','local_review')
             row['allow_scripts']=p.get('allow_scripts',False)
@@ -97,6 +105,9 @@ class NativeControl:
             row['git']={k:p.get('git',{}).get(k,d) for k,d in [('enabled',False),('remote','origin'),('branch','main'),('auto_pull_before_render',False)]}
             row['sync_method']='git' if row['git']['enabled'] else 'disabled'
             if local:
+                row['scratch']=p['id'].startswith('scratch.')
+                row['blender_running']=p['id'] in self.running_blenders()
+                row['vroid_running']=self.vroid.running(pathlib.Path(p['root']).resolve())
                 row.update(root=p['root'],godot_subdir=p.get('godot_subdir','client'),unity_subdir=p.get('unity_subdir',''),project_types=[])
                 root=pathlib.Path(p['root']).resolve()
                 for engine,subdir in [('godot',row['godot_subdir']),('godot',''),('unity',row['unity_subdir'])]:
@@ -107,12 +118,55 @@ class NativeControl:
                     except (OSError,ValueError):pass
             values.append(row)
         return values
+    def workspace(self, session_id):
+        if not isinstance(session_id,str) or not HEX.fullmatch(session_id):
+            raise ValueError('A session workspace requires a 32-character id.')
+        ident = 'scratch.'+session_id
+        root = self.root/'workspaces'/ident
+        with self.lock:
+            if not (root/'ready').is_file():
+                if root.exists():
+                    raise ValueError('Workspace creation was interrupted. Use a new session id.')
+                # Publish only a fully initialized workspace; never seed it from user repositories.
+                import tempfile
+                root.parent.mkdir(parents=True,exist_ok=True)
+                with tempfile.TemporaryDirectory(dir=root.parent) as staging:
+                    source = pathlib.Path(staging)/'project'
+                    for folder in ('outputs','client/scenes','unity/Assets','unity/Packages','unity/ProjectSettings'):
+                        (source/folder).mkdir(parents=True)
+                    (source/'client/project.godot').write_text('config_version=5\n[application]\nconfig/name="Render workspace"\nrun/main_scene="res://scenes/main.tscn"\n',encoding='utf-8')
+                    (source/'client/scenes/main.tscn').write_text('[gd_scene format=3]\n[node name="Workspace" type="Node2D"]\n',encoding='utf-8')
+                    atomic(source/'unity/Packages/manifest.json',{'dependencies':{'com.unity.pipeline':'0.9.1-exp.1'}})
+                    editor = pathlib.Path(self.config.get('native',{}).get('unity_executable',''))
+                    version = next((p.name for p in editor.parents if re.fullmatch(r'\d+\.\d+\.\d+[abfp]\d+',p.name)),None)
+                    if version:
+                        (source/'unity/ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: '+version+'\n',encoding='utf-8')
+                    (source/'ready').touch()
+                    source.rename(root)
+        return {'project_id':ident}
+
     def project(self,ident):
         item=next((p for p in self.config.get('native',{}).get('projects',[]) if p['id']==ident and p.get('enabled')),None)
+        if not item and isinstance(ident,str) and re.fullmatch(r'scratch\.[a-f0-9]{32}',ident):
+            root=self.root/'workspaces'/ident
+            if (root/'ready').is_file():
+                item={'id':ident,'root':str(root),'enabled':True,'allow_scripts':False,
+                      'unity_subdir':'unity','godot_subdir':'client','name':'Session workspace'}
         if not item:raise ValueError('Project access is disabled or unknown.')
         root=pathlib.Path(item['root']).resolve()
         if not root.is_dir():raise ValueError('The approved project directory is unavailable.')
         return item,root
+    @contextmanager
+    def operation(self, project_id, engine=None, **options):
+        """Resolve the authorized workspace again after admission; never run against a moved project."""
+        _, root = self.project(project_id)
+        key = (engine,root,project_id) if engine else None
+        with self.capacity.operation(root, key, **options):
+            project, current = self.project(project_id)
+            if current != root:
+                raise ValueError('Project location changed while waiting.')
+            yield project, root
+
     def manage_project(self,value):
         if set(value)-{'id','name','root','godot_subdir','unity_subdir','enabled','sync_policy','allow_scripts','git'}:raise ValueError('Unexpected project settings.')
         if not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}',value.get('id','')):raise ValueError('Invalid project id.')
@@ -137,21 +191,42 @@ class NativeControl:
             if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}',git.get('remote','origin')):raise ValueError('Invalid Git remote name.')
             branch=git.get('branch','main')
             if not isinstance(branch,str) or not branch or len(branch)>200 or branch.startswith('-') or '..' in branch or any(c in branch for c in '\\:~^?*['):raise ValueError('Invalid Git branch.')
+            if previous and (not item['enabled'] or root != pathlib.Path(previous['root']).resolve()
+                             or item['unity_subdir'] != previous.get('unity_subdir', '')):
+                if self.capacity.occupied(pathlib.Path(previous['root']).resolve()):
+                    raise ValueError('Stop active project tasks and editors before changing its location or disabling it.')
             if previous:projects.remove(previous)
             projects.append(item)
             if self.save_config:self.save_config()
         return {'saved':True}
+    def set_render_capacity(self, maximum):
+        maximum = self.capacity.validate(maximum)
+        with self.lock:
+            settings = self.config.setdefault('native', {})
+            previous = dict(settings)
+            settings['render_concurrency'] = maximum
+            try:
+                if self.save_config:
+                    self.save_config()
+            except Exception:
+                settings.clear()
+                settings.update(previous)
+                raise
+            self.capacity.configure(maximum)
+        return self.capacity.status()
+
     def status(self,local=False):
         native=self.config.get('native',{});engines=[]
         for engine in ('godot','blender'):
             configured=pathlib.Path(native.get(engine+'_executable','')).is_file()
             row={'engine':engine,'installed':configured,'network_isolated':configured and self.guard.ready(engine)}
-            if engine=='blender':row['connected']=self.blender is not None and self.blender.poll() is None
+            if engine=='blender':row['connected']=bool(self.running_blenders())
             engines.append(row)
         engines.append(self.vroid.status())
         engines.append(self.unity.status())
         result={'engines':engines,'projects':self.projects(local),'shell_exposed':False,'raw_code_tool_exposed':any(p.get('allow_scripts') for p in self.projects()),'project_code_executes_locally':True}
         if local:
+            result['render_capacity']=self.capacity.status()
             result['setup_script']=str(pathlib.Path(__file__).parent/'Setup-Native-Privacy.ps1')
             result['privacy_setup']=dict(self.privacy_setup)
         return result
@@ -217,11 +292,19 @@ class NativeControl:
                 except ValueError:pass
             data=private_text(text).encode('utf-8');folder=self.root/'filtered-downloads';folder.mkdir(exist_ok=True)
             target=folder/(hashlib.sha256(data).hexdigest()+file.suffix.lower())
-            if not target.exists():target.write_bytes(data)
+            with self.capacity.operation(('filtered-download',target)):
+                if not target.exists():
+                    temporary=target.with_suffix('.'+uuid.uuid4().hex+'.part')
+                    try:
+                        temporary.write_bytes(data)
+                        temporary.replace(target)
+                    finally:
+                        temporary.unlink(missing_ok=True)
             return target
         return file
     def sync_plan(self,body):
         ident=body.get('project_id');_,root=self.project(ident);files=body.get('files')
+        if ident.startswith('scratch.'):raise ValueError('File synchronization requires a registered project.')
         if self.config.get('native',{}).get('git_only_sync'):raise ValueError('Project sync now uses Git. Commit and push on the VPS, then call project_git(operation="pull").')
         if not isinstance(files,list) or not 1<=len(files)<=10000:raise ValueError('Provide 1 to 10000 files.')
         state_file=self.root/'sync-state'/(ident+'.json')
@@ -252,6 +335,7 @@ class NativeControl:
         with self.lock:
             allowed=any(p['status']=='planned' and any(f['sha256']==sha and f['bytes']==size and f['status']!='same' for f in p['files']) for p in self.plans.values())
             if not allowed:raise ValueError('Create a sync plan before uploading files.')
+        with self.capacity.operation(('blob',sha)):
             folder=self.root/'blobs';folder.mkdir(exist_ok=True);target=folder/sha
             if target.exists():
                 if target.stat().st_size!=size:raise ValueError('Upload manifest size does not match its hash.')
@@ -269,10 +353,12 @@ class NativeControl:
         with self.lock:
             plan=self.plans.get(ident)
             if not plan:raise ValueError('Unknown sync plan.')
+        with self.operation(plan['project_id']) as (project,root):
             if plan['status']=='applied':return self.public_plan(plan)
             if plan['status']!='planned':raise ValueError('This plan is no longer applicable.')
-            project,root=self.project(plan['project_id']);remote_wins=project.get('sync_policy','local_review')=='remote_wins'
-            if any(j['project_id']==plan['project_id'] and j['status'] in ('queued','running') for j in self.jobs.values()):raise ValueError('Wait for active native tasks before applying sync.')
+            remote_wins=project.get('sync_policy','local_review')=='remote_wins'
+            with self.lock:
+                if any(j['project_id']==plan['project_id'] and j['status'] in ('queued','running') for j in self.jobs.values()):raise ValueError('Wait for active native tasks before applying sync.')
             if approve_conflicts:plan['conflicts_approved']=True
             if not remote_wins and any(f['status']=='conflict' for f in plan['files']) and not plan['conflicts_approved']:raise ValueError('Local files differ. Review this sync plan and approve conflicts on the local management page.')
             changed=[f for f in plan['files'] if f['status']!='same']
@@ -306,6 +392,8 @@ class NativeControl:
     def extract_project_archive(self,project_id,archive_path,destination,strip_components=0,expected_sha256=None,request_id=None):
         from native_archive import validate_request
         _,root=self.project(project_id)
+        if project_id.startswith('scratch.') and not clean_relative(destination).startswith('outputs/'):
+            raise ValueError('Extract standalone archives into a new folder under outputs/.')
         args=dict(archive_path=archive_path,destination=destination,strip_components=strip_components,expected_sha256=expected_sha256)
         if request_id is not None and (not isinstance(request_id,str) or not HEX.fullmatch(request_id)):
             raise ValueError('request_id must contain 32 lowercase hexadecimal characters.')
@@ -315,28 +403,28 @@ class NativeControl:
             previous=latest_attempt(self.jobs,request_id,fingerprint)
             if previous:return self.public_job(previous)
             validate_request(root,**args)
-            if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=8:raise ValueError('Native task queue is full.')
+            if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=max(8,self.capacity.maximum * 2):raise ValueError('Native task queue is full.')
             job={'id':uuid.uuid4().hex,'request_id':request_id,'fingerprint':fingerprint,'project_id':project_id,'engine':'archive','operation':'extract','arguments':args,'status':'queued','created_at':time.time(),'artifacts':[]}
             self.jobs[job['id']]=job;self.save_job(job)
             threading.Thread(target=self.run_archive,args=(job,),daemon=True).start()
             return self.public_job(job)
     def run_archive(self,job):
         from native_archive import extract_archive
-        with self.archive_lock:
-            try:
-                _,root=self.project(job['project_id'])
+        try:
+            with self.operation(job['project_id']) as (_,root):
                 with self.lock:job['status']='running';self.save_job(job)
                 result=extract_archive(root,**job['arguments'])
                 with self.lock:job.update(status='succeeded',result=result);self.save_job(job)
-            except Exception as exc:
-                # Never return paths, filenames embedded in OS errors, or raw tracebacks.
-                message=str(exc) if type(exc) is ValueError else 'Archive extraction failed. Check the archive and available disk space locally.'
-                with self.lock:job.update(status='failed',error=private_text(message));self.save_job(job)
+        except Exception as exc:
+            # Never return paths, filenames embedded in OS errors, or raw tracebacks.
+            message=str(exc) if type(exc) is ValueError else 'Archive extraction failed. Check the archive and available disk space locally.'
+            with self.lock:job.update(status='failed',error=private_text(message));self.save_job(job)
     def project_git(self,project_id,operation='status',request_id=None):
         project,root=self.project(project_id)
         if operation=='status':
             from native_git import git_for
-            return git_for(self,project,root).status()
+            with self.operation(project_id) as (project,root):
+                return git_for(self,project,root).status()
         if operation not in ('pull','fetch'):raise ValueError('Only Git status, fetch and pull are exposed.')
         return self.queue({'project_id':project_id,'engine':'git','operation':operation,'arguments':{},'request_id':request_id or uuid.uuid4().hex})
     def queue(self,body):
@@ -361,7 +449,7 @@ class NativeControl:
             previous=latest_attempt(self.jobs,request_id,fingerprint)
             if previous and previous['status']!='failed':
                 return self.public_job(previous)
-            if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=8:raise ValueError('Native task queue is full.')
+            if sum(j['status'] in ('queued','running') for j in self.jobs.values())>=max(8,self.capacity.maximum * 2):raise ValueError('Native task queue is full.')
             job={'id':uuid.uuid4().hex,'request_id':request_id,'fingerprint':fingerprint,'project_id':project_id,'engine':engine,'operation':operation,'arguments':args,'status':'queued','created_at':time.time(),'artifacts':[]}
             job.update(attempt_fields(previous))
             self.jobs[job['id']]=job;self.save_job(job)
@@ -416,11 +504,13 @@ class NativeControl:
         if 'lens' in args and (type(args['lens'])not in (int,float) or not 1<=args['lens']<=500):raise ValueError('Invalid camera lens.')
         if 'replace' in args and type(args['replace'])is not bool:raise ValueError('replace must be boolean.')
     def run(self,job):
-        with self.execute_lock:
-            if job['status']=='cancelled':return
-            stage='operation'
-            try:
-                project,root=self.project(job['project_id'])
+        if job['status']=='cancelled':return
+        stage='operation'
+        root=self.root
+        try:
+            ident=job['project_id']
+            engine = job['engine'] if job['engine']!='git' else None
+            with self.operation(ident,engine,queue=True,cancelled=lambda:job['status']=='cancelled') as (project,root):
                 if job['engine']!='git':self.guard.require(job['engine'])
                 with self.lock:
                     if job['status']=='cancelled':return
@@ -460,17 +550,17 @@ class NativeControl:
                     if job['status']!='cancelled':job['status']='failed' if job['engine']=='blender' and (job.get('result',{}).get('executed') is False or job.get('result',{}).get('partial_success')) else 'succeeded'
                     if job['status']=='failed':job['error']='Blender reported an operation failure. See result for filtered diagnostics.';job['error_stage']='operation'
                     self.save_job(job)
-            except Exception as error:
-                import logging;logging.exception('Native task failed')
-                with self.lock:
-                    if job['status']=='cancelled':return
-                    if job['engine']=='blender' and stage=='operation':
-                        from native_blender_output import diagnostic
-                        job.setdefault('result',{})['diagnostic']=private_result(diagnostic(error,root))
-                    job['status']='failed'
-                    job['error']='Project Git synchronization failed before the native operation started. Check the local Git connection and proxy, then retry.' if stage=='git_sync' else 'Native operation failed. Check the local management page and application log.'
-                    job['error_stage']=stage
-                    self.save_job(job)
+        except Exception as error:
+            import logging;logging.exception('Native task failed')
+            with self.lock:
+                if job['status']=='cancelled':return
+                if job['engine']=='blender' and stage=='operation':
+                    from native_blender_output import diagnostic
+                    job.setdefault('result',{})['diagnostic']=private_result(diagnostic(error,root))
+                job['status']='failed'
+                job['error']='Project Git synchronization failed before the native operation started. Check the local Git connection and proxy, then retry.' if stage=='git_sync' else 'Native operation failed. Check the local management page and application log.'
+                job['error_stage']=stage
+                self.save_job(job)
     def import_godot(self,job,project,root):
         client=inside(root,project.get('godot_subdir','client'));folder=self.root/'runs'/job['id'];folder.mkdir(parents=True,exist_ok=True)
         executable=self.config['native']['godot_executable']
@@ -497,40 +587,49 @@ class NativeControl:
         job['artifacts']=[{'index':0,'filename':'godot-capture.png','file':output.name}];job['result']={'captured':True,'hardware_render':True}
     def run_blender(self,job,root,output_dir):
         if job['status']=='cancelled':return
-        job['_blender_started']=True
-        spool=self.root/'blender-spool';spool.mkdir(exist_ok=True)
-        if self.blender and (self.blender.poll() is not None or self.blender_project!=job['project_id']):
-            if self.blender_project!=job['project_id'] and self.blender.poll() is None:raise ValueError('Stop the managed Blender instance before switching projects.')
-            self.blender.close();self.blender=None
-        if not self.blender:
+        ident=job['project_id']
+        spool=self.root/'blender-spool'/hashlib.sha256(ident.encode()).hexdigest()
+        spool.mkdir(parents=True,exist_ok=True)
+        with self.lock:
+            process=self.blenders.get(ident)
+            if process and process.poll() is not None:
+                process.close()
+                del self.blenders[ident]
+                process=None
+            if job['status']=='cancelled':return
+            job['_blender_started']=True
+        if not process:
             ready=spool/'ready.json'
             if ready.exists():ready.unlink()
             for old in spool.glob('*.request.json'):old.replace(old.with_suffix('.abandoned'))
             atomic(spool/'settings.json',{'project':str(root),'spool':str(spool),'outputs':str(output_dir)})
             command=[self.config['native']['blender_executable'],'--factory-startup','--disable-autoexec','--python',str(pathlib.Path(__file__).parent/'native_blender.py'),'--',str(spool/'settings.json')]
-            self.blender=self.process_factory(command,root,self.root/'blender.log',{'BLENDER_SYSTEM_SCRIPTS':str(pathlib.Path(self.config['native']['blender_executable']).parent/'5.2/scripts')})
-            self.blender_project=job['project_id']
+            with self.lock:
+                if job['status']=='cancelled':return
+                process=self.process_factory(command,root,spool/'blender.log',{'BLENDER_SYSTEM_SCRIPTS':str(pathlib.Path(self.config['native']['blender_executable']).parent/'5.2/scripts')})
+                self.blenders[ident]=process
+            self.capacity.track(('blender',root,ident),process)
             for _ in range(300):
-                if job['status']=='cancelled':self.blender.stop();return
+                if job['status']=='cancelled':process.stop();return
                 if ready.exists():break
-                if self.blender.poll() is not None:raise ValueError('Managed Blender stopped')
+                if process.poll() is not None:raise ValueError('Managed Blender stopped')
                 time.sleep(0.1)
             else:
-                self.blender.stop()
+                process.stop()
                 raise ValueError('Managed Blender startup timeout')
         atomic(spool/(job['id']+'.request.json'),{'command':job['operation'],'arguments':job['arguments']})
         response=spool/(job['id']+'.response.json')
         for _ in range(10*job['arguments'].get('timeout_seconds',1800 if job['operation'] in ('execute_code','run_script','batch') else 240)):
             if job['status']=='cancelled':return
             if response.exists():break
-            if self.blender.poll() is not None:raise ValueError('Managed Blender stopped')
+            if process.poll() is not None:raise ValueError('Managed Blender stopped')
             progress=spool/(job['id']+'.progress.json')
             if progress.exists() and progress.stat().st_size<=16384:
                 try:job['progress']=private_result(json.loads(progress.read_text(encoding='utf-8')))
                 except (ValueError,OSError):pass
             time.sleep(0.1)
         else:
-            self.blender.stop()
+            process.stop()
             raise ValueError('Managed Blender operation timeout')
         data=json.loads(response.read_text(encoding='utf-8'))
         from remote_privacy import remote_json
@@ -549,6 +648,7 @@ class NativeControl:
     def blender_tasks(self,project_id=None):
         if project_id:self.project(project_id)
         allowed={p['id'] for p in self.config.get('native',{}).get('projects',[]) if p.get('enabled')}
+        if project_id:allowed.add(project_id)
         with self.lock:return {'jobs':[self.public_job(j) for j in sorted(self.jobs.values(),key=lambda j:j['created_at'],reverse=True) if j['engine']=='blender' and j['project_id'] in allowed and (project_id is None or j['project_id']==project_id)][:100]}
     def cancel_blender(self,ident):
         with self.lock:
@@ -557,7 +657,11 @@ class NativeControl:
             self.project(job['project_id'])
             if job['status'] in ('queued','running'):
                 job['status']='cancelled'
-                if job.get('_blender_started') and self.blender:self.blender.stop()
+                if job.get('_blender_started'):
+                    process=self.blenders.pop(job['project_id'],None)
+                    if process:
+                        process.stop()
+                        process.close()
                 self.save_job(job)
             return self.public_job(job)
     def job_status(self,ident):
@@ -574,8 +678,20 @@ class NativeControl:
             file=self.root/'artifacts'/job['artifacts'][index]['file']
             if not re.fullmatch(ident+r'(?:-\d+)?(?:-output-\d+)?\.(png|jpg|jpeg|webp|glb|gltf|obj|vrm|blend|mp4|webm|json|wav|ogg|fbx|abc)',file.name) or not file.is_file():raise ValueError('Invalid artifact.')
             return file
-    def stop_blender(self):
+    def running_blenders(self):
         with self.lock:
-            if any(j['engine']=='blender' and j['status'] in ('queued','running') for j in self.jobs.values()):raise ValueError('Wait for current Blender operations to finish.')
-            if self.blender:self.blender.stop();self.blender.close();self.blender=None;self.blender_project=None
+            return [ident for ident, process in self.blenders.items() if process.poll() is None]
+
+    def stop_blender(self,project_id=None):
+        with self.lock:
+            if project_id is None:
+                running=self.running_blenders()
+                if len(running)>1:raise ValueError('Select the Blender project to stop.')
+                project_id=next(iter(running),None)
+            if any(j['engine']=='blender' and j['project_id']==project_id and j['status']=='running' for j in self.jobs.values()):
+                raise ValueError('Wait for the current Blender operation to finish.')
+            process=self.blenders.pop(project_id,None)
+            if process:
+                process.stop()
+                process.close()
             return {'stopped':True}

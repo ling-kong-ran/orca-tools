@@ -12,8 +12,10 @@ class ExportInstallerTests(unittest.TestCase):
             source = pathlib.Path(folder); project = source/'plugin/VroidStudioMcp'
             (project/'Commands/Handlers').mkdir(parents=True); (project/'MCP').mkdir()
             (project/'Commands/CommandDispatcher.cs').write_text('"save", "categories"\n["save"] = SessionHandlers.Save,', encoding='utf-8')
+            (project/'Runtime').mkdir()
+            (project/'Runtime/ServerSettings.cs').write_text('FilePath => Path.Combine')
             (project/'Plugin.cs').write_text('MessagesI18n.Install();', encoding='utf-8')
-            (project/'MCP/McpHost.cs').write_text('T("sections",', encoding='utf-8')
+            (project/'MCP/McpHost.cs').write_text('var info = new Dictionary<string, object>();\nT("sections",', encoding='utf-8')
             self.assertEqual(installer.patch_source(source), project)
             self.assertIn('["export_vrm"] = ExportHandlers.Export', (project/'Commands/CommandDispatcher.cs').read_text(encoding='utf-8'))
             self.assertIn('OnScreenActivate', (project/'Plugin.cs').read_text(encoding='utf-8'))
