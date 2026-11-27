@@ -143,6 +143,7 @@ class Tests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    root=pathlib.Path(tmp);folder=root/'saved';folder.mkdir();(folder/'image.json').write_text(json.dumps(graph))
    adapter=Adapter();bridge=Bridge({'data_dir':str(root/'bridge'),'workflow_dirs':[str(folder)]},adapter)
+   bridge.native.capacity.probe=lambda:4
    item=bridge.catalog()[0];self.assertEqual(item['required_parameters'],['image_1'])
    with self.assertRaisesRegex(ValueError,'Provide these input'):bridge.submit({'workflow_id':item['id'],'request_id':'a'*32})
    for asset in ('C:/private.png','../private.png','https://example.invalid/p.png'):

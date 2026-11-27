@@ -43,6 +43,7 @@ class ScriptArtifactTests(unittest.TestCase):
     def test_partial_failure_status_allows_only_that_jobs_registered_artifacts(self):
         control=NativeControl({'data_dir':str(self.root/'service'),'native':{'projects':[
             {'id':'test','enabled':True,'root':str(self.project),'allow_scripts':True}]}})
+        control.capacity.probe=lambda:4
         job={**self.job,'engine':'godot','operation':'script','status':'running','artifacts':[]}
         control.jobs[job['id']]=job
         directory=control.root/'artifacts';directory.mkdir()

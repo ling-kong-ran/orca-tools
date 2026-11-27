@@ -201,4 +201,5 @@ Claude 若反复创建 Bash 后台 `sleep` 等待命令，这些命令并不查�
 - 不同项目的编辑、截图、脚本、Git 和解压可以并行。同一工作区的修改串行。Godot 和 Blender 的后台任务可以排队；同步启动编辑器遇到容量不足会提示稍后重试。进度、取消和 Unity 健康查询可以在任务进行时调用。
 - 直接调用 `capture_scene`、`blender_operation`、`vroid_operation` 或 `unity_start` 时可以省略 `project_id`。Bridge 为当前 MCP 连接创建独立工作区，提供空白 Godot 场景和带 Pipeline 的 Unity 工程。调用 `session_workspace()` 可获得它的 ID，交给另一个工具连接接着做。并行做另一份独立任务时，调用 `session_workspace(new=true)`，再把返回的 ID 传给这份任务。工作区保存于 Bridge 数据目录的 `native/workspaces`。
 - 临时工作区支持文件读取、产物下载和解压到 `outputs/` 下的新目录。Unity 可做截图和诊断。Git 同步需要登记仓库，项目脚本需要在本机授权。
+- Bridge 每小时检查闲置的临时工作区。连续 7 天未使用且没有任务或编辑器占用时，会清理可重建的 Unity `Library` 和 Godot `.godot`，保留工作区 ID、源文件和产物。已有工作区从新版首次记录活动时开始计时。
 - ComfyUI 的 `run_workflow` 可以直接调用，也可以传入 `project_id` 与该项目的操作互斥；已提交任务占用共享渲染名额。ComfyUI 实际执行几个工作流取决于它自己的执行器。Tripo 沿用其服务端工作流调度，无需登记本机仓库。

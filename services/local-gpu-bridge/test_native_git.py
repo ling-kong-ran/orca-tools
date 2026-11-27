@@ -87,6 +87,7 @@ class GitTests(unittest.TestCase):
   control=NativeControl({'data_dir':str(self.root/'render-service'),'native':{'projects':[project]}},guard=Ready())
   def capture(job,*args):
    self.assertEqual((self.mirror/'scene.txt').read_text(),'latest before render');self.assertTrue((self.mirror/'client/main.tscn').is_file());job['result']={'captured':True}
+  control.capacity.probe=lambda:4
   control.run_godot=capture
   job=control.queue({'project_id':'fixture','engine':'godot','operation':'capture','arguments':{'scene':'main.tscn'},'request_id':uuid.uuid4().hex})
   deadline=time.monotonic()+20
@@ -100,6 +101,7 @@ class GitTests(unittest.TestCase):
   control=NativeControl({'data_dir':str(self.root/'failed-service'),'native':{'projects':[project]}},guard=Ready())
   job={'id':uuid.uuid4().hex,'project_id':'fixture','engine':'blender','operation':'execute_code',
        'arguments':{'code':'result=1'},'status':'queued','artifacts':[]}
+  control.capacity.probe=lambda:4
   control.jobs[job['id']]=job
   with patch('native_git.ProjectGit.pull',side_effect=ValueError('private host detail')),patch.object(control,'run_blender') as blender:
    with self.assertLogs(level='ERROR'):control.run(job)

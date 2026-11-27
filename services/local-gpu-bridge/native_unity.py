@@ -150,7 +150,8 @@ class UnityControl:
     def editor_state(self, project_id):
         """Background Pipeline health, independent of a blocked MCP/main-thread call."""
         _, root = self.project(project_id)
-        if not self.editor or self.editor.poll() is not None or self.editor_project != project_id:
+        editor = self.editor
+        if not editor or editor.poll() is not None or self.editor_project != project_id:
             return {'running':False,'ready':False,'state':'not_running'}
         result={'running':True,'ready':False,'state':'unreachable','automated':None,
                 'dialog_detection':'pipeline_only'}
@@ -159,7 +160,7 @@ class UnityControl:
             if descriptor.stat().st_size>65536: return result
             data=json.loads(descriptor.read_text(encoding='utf-8'))
             # A stale/foreign descriptor must never redirect a credential-bearing probe.
-            if data.get('pid')!=self.editor.process.pid or pathlib.Path(data.get('projectPath','')).resolve()!=root.resolve():
+            if data.get('pid')!=editor.process.pid or pathlib.Path(data.get('projectPath','')).resolve()!=root.resolve():
                 return result
             port=data.get('port');token=data.get('evalToken')
             if type(port)is not int or not 1<=port<=65535 or not isinstance(token,str) or not token or len(token)>4096:
@@ -404,10 +405,28 @@ class UnityProjects:
     def status(self):
         result = self.base.status()
         with self.native.lock:
-            editors = [s for s in self.sessions.values() if s.editor and s.editor.poll() is None]
-            result.update(running=bool(editors), connected=any(s.pipeline_ready and s.rpc_process
-                          and s.rpc_process.poll() is None for s in editors))
+            editors = [s for s in self.sessions.values() if (editor := s.editor) and editor.poll() is None]
+            result.update(running=bool(editors), connected=any(s.pipeline_ready and (rpc := s.rpc_process)
+                           and rpc.poll() is None for s in editors))
         return result
+
+    def reap(self):
+        with self.native.lock:
+            sessions = tuple(self.sessions.values())
+        for session in sessions:
+            if not session.lock.acquire(blocking=False):
+                continue
+            try:
+                editor = session.editor
+                if editor is not None and editor.poll() is not None:
+                    session.editor = None
+                    session.editor_project = None
+                    try:
+                        session.close_rpc()
+                    finally:
+                        editor.close()
+            finally:
+                session.lock.release()
 
     def editor_state(self, project_id):
         return self.session(project_id).editor_state(project_id)

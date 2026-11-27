@@ -149,6 +149,27 @@ class ComfyAdapter:
         result = self.history_status(self.request(history_route), prompt_id)
         if result: return result
         return {'status': 'unknown', 'message': 'No queue/history entry. The backend may have restarted; do not blindly resubmit.'}
+
+    def find_submission(self, client_id):
+        """Recover an unacknowledged prompt using the original Bridge client id."""
+        def matches(entry):
+            return (isinstance(entry, (list, tuple)) and len(entry) > 3 and
+                    isinstance(entry[1], str) and isinstance(entry[3], dict) and
+                    entry[3].get('client_id') == client_id)
+
+        queue = self.request('/queue')
+        for key, state in (('queue_running', 'running'), ('queue_pending', 'queued')):
+            for entry in queue[key]:
+                if matches(entry):
+                    return {'prompt_id': entry[1], 'status': state}
+        # Read history after the queue so a prompt finishing during the lookup is visible.
+        history = self.request('/history?max_items=100')
+        for prompt_id, entry in history.items():
+            if matches(entry.get('prompt')) and entry['prompt'][1] == prompt_id:
+                status = self.history_status(history, prompt_id)
+                if status:
+                    return {'prompt_id': prompt_id, **status}
+        return None
     def cancel_pending(self, prompt_id):
         queue = self.request('/queue')
         if any(entry[1] == prompt_id for entry in queue.get('queue_running', [])):
@@ -177,16 +198,23 @@ class WorkflowLease:
         self.checking = threading.Lock()
 
     def poll(self):
-        if self.job['status'] not in ('queued','running','submitting'):
+        if not self.held(self.job):
             return 0
-        if self.job.get('prompt_id') and time.monotonic() >= self.next_check and self.checking.acquire(False):
+        if time.monotonic() >= self.next_check and self.checking.acquire(False):
             threading.Thread(target=self.refresh,daemon=True).start()
         return None
+
+    @staticmethod
+    def held(job):
+        status = job.get('status')
+        return (status in ('queued', 'running', 'submitting') or
+                (status == 'unknown' and not job.get('prompt_id') and
+                 not job.get('reservation_released')))
 
     def refresh(self):
         try:
             self.bridge.inspect(self.job['id'])
-        except (OSError,ValueError):
+        except (OSError, ValueError, KeyError):
             pass
         finally:
             self.next_check = time.monotonic() + 2
@@ -213,7 +241,10 @@ class Bridge:
                 if HEX.fullmatch(job['id']): self.jobs[job['id']] = job
             except (ValueError, KeyError): pass
         for job in self.jobs.values():
-            if job.get('prompt_id') and job['status'] in ('queued','running'):
+            if job.get('status') == 'submitting':
+                job.update(status='unknown', message='Submission was interrupted. Check this job before retrying.')
+                self.save(job)
+            if WorkflowLease.held(job):
                 try: root = self.workflow_root(job.get('project_id'),job['id'])
                 except ValueError: root = ('workflow',job['id'])
                 self.native.capacity.track(('comfyui',root,job['id']),WorkflowLease(self,job),exclusive=True)
@@ -260,11 +291,16 @@ class Bridge:
         with self.lock:
             existing = latest_attempt(self.jobs, request_id, fingerprint)
             if existing and existing['status'] != 'failed':
-                return self.public(existing)
-            active_states = ('submitting', 'queued', 'running', 'unknown')
-            active = [j for j in self.jobs.values() if j['status'] in active_states]
+                if existing['status'] != 'unknown' or existing.get('prompt_id'):
+                    return self.public(existing)
+                recover_id = existing['id']
+            else:
+                recover_id = None
+            active = [j for j in self.jobs.values() if WorkflowLease.held(j)]
             maximum = self.config.get('max_active_jobs', 8)
-            refresh = [j['id'] for j in active if j.get('prompt_id')] if len(active)>=maximum else []
+            refresh = [j['id'] for j in active if j['status'] != 'submitting'] if len(active)>=maximum else []
+        if recover_id:
+            return self.inspect(recover_id)
         for ident in refresh:
             self.inspect(ident)
         workflow = next((w for w in self.workflows() if w['id'] == body.get('workflow_id')), None)
@@ -281,7 +317,7 @@ class Bridge:
             if self.workflow_root(project_id,ident) != root:
                 raise ValueError('Project location changed while waiting.')
             with self.lock:
-                if sum(j['status'] in active_states for j in self.jobs.values()) >= maximum:
+                if sum(WorkflowLease.held(j) for j in self.jobs.values()) >= maximum:
                     raise ValueError('Bridge job limit reached. Check existing jobs before submitting more.')
                 job = {'id': ident, 'request_id': request_id, 'fingerprint': fingerprint,
                        'workflow_id': workflow['id'], 'kind': 'comfyui.workflow', 'status': 'submitting',
@@ -295,12 +331,13 @@ class Bridge:
             except Exception:
                 with self.lock:
                     job.update(status='unknown',message='Submission was not acknowledged. Check the local queue before retrying.')
+                    self.native.capacity.track(key,WorkflowLease(self,job),exclusive=True)
                     self.save(job)
                 raise
             with self.lock:
                 job.update(prompt_id=prompt_id,status='queued')
-                self.save(job)
                 self.native.capacity.track(key,WorkflowLease(self,job),exclusive=True)
+                self.save(job)
                 return self.public(job)
     def inspect(self, ident):
         with self.native.capacity.operation(('workflow-job',ident)):
@@ -311,18 +348,37 @@ class Bridge:
             if ident not in self.jobs: raise ValueError('Unknown bridge job.')
             job = self.jobs[ident]
             prompt_id = job.get('prompt_id')
-            if not prompt_id: return self.public(job)
+            uncertain = job['status'] == 'unknown' and not prompt_id
+            if not prompt_id and not uncertain: return self.public(job)
             recover = job['status']=='succeeded' and not job.get('artifacts')
             if job['status'] in ('succeeded','failed','cancelled') and not recover:
                 return self.public(job)
         try:
-            update = self.adapters[job['kind']].inspect(prompt_id)
+            adapter = self.adapters[job['kind']]
+            if uncertain:
+                update = adapter.find_submission('local-gpu-bridge-' + ident)
+                if update is None:
+                    # A response can fail before promptly submitted work appears in
+                    # the queue. A released job can still be recovered by its ID.
+                    if job.get('reservation_released') or time.time() - job['updated_at'] < 120:
+                        return self.public(job)
+                    update = {'reservation_released': True,
+                              'message': 'No matching prompt was found in the local queue or recent history.'}
+                else:
+                    update['message'] = 'Recovered the original local prompt.'
+            else:
+                update = adapter.inspect(prompt_id)
         except ValueError:
             if not recover: raise
             update = {}
         with self.lock:
             if not recover or (update.get('status')=='succeeded' and update.get('artifacts')):
+                held = WorkflowLease.held(job)
                 job.update(update)
+                if not held and WorkflowLease.held(job):
+                    try: root = self.workflow_root(job.get('project_id'), ident)
+                    except ValueError: root = ('workflow', ident)
+                    self.native.capacity.track(('comfyui', root, ident), WorkflowLease(self, job), exclusive=True)
                 self.save(job)
             return self.public(job)
 
@@ -338,6 +394,19 @@ class Bridge:
                         self.save(job)
             elif job['status'] == 'running': raise ValueError('Running jobs cannot be interrupted through this bridge.')
             return self._inspect(ident)
+
+    def maintain(self):
+        next_cleanup = 0
+        while True:
+            try:
+                self.native.reap_editors()
+                self.native.capacity.status()
+                if time.monotonic() >= next_cleanup:
+                    self.native.prune_workspace_caches(time.time() - 7 * 86400)
+                    next_cleanup = time.monotonic() + 3600
+            except Exception:
+                logging.exception('Bridge maintenance failed')
+            time.sleep(30)
 
 def make_handler(bridge):
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -510,6 +579,7 @@ def main():
     start_admin(bridge, config.get('admin_port', 18773))
     from comfy_startup import start_background
     start_background(config)
+    threading.Thread(target=bridge.maintain, name='bridge-maintenance', daemon=True).start()
     if config.get('auto_setup_privacy',True) and os.name=='nt':bridge.native.setup_privacy()
     server.serve_forever()
 

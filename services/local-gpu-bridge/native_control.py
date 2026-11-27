@@ -1,5 +1,5 @@
 """Project-scoped synchronization and typed native MCP operations; no shell API."""
-import base64,copy,hashlib,ipaddress,json,math,os,pathlib,re,shutil,socket,subprocess,threading,time,uuid
+import base64,copy,hashlib,ipaddress,json,math,os,pathlib,re,shutil,socket,stat,subprocess,threading,time,uuid
 from contextlib import contextmanager
 from render_capacity import RenderCapacity
 from native_process import EgressGuard,ManagedProcess
@@ -94,7 +94,7 @@ class NativeControl:
         values=[]
         entries=list(self.config.get('native',{}).get('projects',[]))
         if local:
-            entries += [self.project(root.name)[0] for root in (self.root/'workspaces').glob('scratch.*')
+            entries += [self.project(root.name, touch=False)[0] for root in (self.root/'workspaces').glob('scratch.*')
                         if re.fullmatch(r'scratch\.[a-f0-9]{32}',root.name) and (root/'ready').is_file()]
         for p in entries:
             row={k:p[k] for k in ('id','name','enabled')}
@@ -143,9 +143,20 @@ class NativeControl:
                         (source/'unity/ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: '+version+'\n',encoding='utf-8')
                     (source/'ready').touch()
                     source.rename(root)
+            self.touch_workspace(root)
         return {'project_id':ident}
 
-    def project(self,ident):
+    @staticmethod
+    def touch_workspace(root):
+        marker = root/'.last-used'
+        try:
+            if time.time() - marker.stat().st_mtime < 60:
+                return
+        except FileNotFoundError:
+            pass
+        marker.touch()
+
+    def project(self, ident, *, touch=True):
         item=next((p for p in self.config.get('native',{}).get('projects',[]) if p['id']==ident and p.get('enabled')),None)
         if not item and isinstance(ident,str) and re.fullmatch(r'scratch\.[a-f0-9]{32}',ident):
             root=self.root/'workspaces'/ident
@@ -155,7 +166,65 @@ class NativeControl:
         if not item:raise ValueError('Project access is disabled or unknown.')
         root=pathlib.Path(item['root']).resolve()
         if not root.is_dir():raise ValueError('The approved project directory is unavailable.')
+        if touch and ident.startswith('scratch.'):
+            self.touch_workspace(root)
         return item,root
+
+    def reap_editors(self):
+        self.unity.reap()
+        self.vroid.reap()
+        with self.lock:
+            running = {job['project_id'] for job in self.jobs.values()
+                       if job['engine'] == 'blender' and job['status'] == 'running'}
+            for ident, process in tuple(self.blenders.items()):
+                if ident not in running and process.poll() is not None:
+                    process.close()
+                    del self.blenders[ident]
+
+    def prune_workspace_caches(self, cutoff):
+        """Remove only rebuildable engine caches in an idle, Bridge-owned workspace."""
+        def plain_directory(path):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return False
+            return (stat.S_ISDIR(info.st_mode) and
+                    not getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+        workspaces = self.root/'workspaces'
+        if not plain_directory(workspaces):
+            return
+        for root in workspaces.glob('scratch.*'):
+            if not re.fullmatch(r'scratch\.[a-f0-9]{32}', root.name) or not plain_directory(root):
+                continue
+            try:
+                with self.capacity.operation(root.resolve(), busy_timeout=0):
+                    with self.lock:
+                        if self.capacity.occupied(root.resolve(), include_operation=False):
+                            continue
+                        if any(job['project_id'] == root.name and job['status'] in ('queued', 'running')
+                               for job in self.jobs.values()):
+                            continue
+                        if not (root/'ready').is_file():
+                            continue
+                        marker = root/'.last-used'
+                        if not marker.exists():
+                            # Adopt workspaces created before activity was recorded.
+                            self.touch_workspace(root)
+                            continue
+                        if marker.stat().st_mtime >= cutoff:
+                            continue
+                    godot = root/'client'
+                    if plain_directory(godot) and plain_directory(godot/'.godot'):
+                        shutil.rmtree(godot/'.godot')
+                    unity = root/'unity'
+                    if plain_directory(unity) and plain_directory(unity/'Library'):
+                        from native_unity import startup_lock
+                        with startup_lock(unity):
+                            shutil.rmtree(unity/'Library')
+            except (OSError, ValueError):
+                # This workspace is busy or a local app still has files open.
+                continue
     @contextmanager
     def operation(self, project_id, engine=None, **options):
         """Resolve the authorized workspace again after admission; never run against a moved project."""

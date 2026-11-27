@@ -286,6 +286,25 @@ class VroidProjects:
             session = self.sessions.get(root)
             return bool(session and session.process and session.process.poll() is None)
 
+    def reap(self):
+        with self.native.lock:
+            roots = tuple(self.sessions)
+        for root in roots:
+            try:
+                with self.native.capacity.operation(root, busy_timeout=0):
+                    with self.native.lock:
+                        session = self.sessions.get(root)
+                        if not session or not session.process or session.process.poll() is None:
+                            continue
+                        session.process.close()
+                        session.process = None
+                        self.sessions.pop(root)
+                        if self.legacy_owner == root:
+                            self.legacy_owner = None
+            except ValueError:
+                # Another operation won admission.
+                continue
+
     def session(self, root):
         with self.native.lock:
             if root not in self.sessions:

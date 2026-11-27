@@ -62,16 +62,16 @@ class RenderCapacity:
             self.maximum = self.validate(maximum)
             self.condition.notify_all()
 
-    def occupied(self, root):
+    def occupied(self, root, *, include_operation=True):
         with self.condition:
-            return root in self.busy or any(
+            return (include_operation and root in self.busy) or any(
                 key[1] == root and process.poll() is None for key, process in self.residents.items()
             )
 
     def counts(self):
         # Caller holds the condition. A process may have exited between requests.
         self.residents = {key: process for key, process in self.residents.items() if process.poll() is None}
-        self.exclusive_jobs = {root:job for root,job in self.exclusive_jobs.items() if job.poll() is None}
+        self.exclusive_jobs = {key:job for key,job in self.exclusive_jobs.items() if job.poll() is None}
         used = self.active | self.residents.keys()
         now = time.monotonic()
         if now >= self.sample_at:
@@ -93,17 +93,17 @@ class RenderCapacity:
         with self.condition:
             self.residents[key] = process
             if exclusive:
-                self.exclusive_jobs[key[1]] = process
+                self.exclusive_jobs[key] = process
 
     def project_available(self, root):
         if root in self.busy:
             return False
-        job = self.exclusive_jobs.get(root)
-        if job is None:
-            return True
-        if job.poll() is None:
-            return False
-        del self.exclusive_jobs[root]
+        for key, job in tuple(self.exclusive_jobs.items()):
+            if key[1] != root:
+                continue
+            if job.poll() is None:
+                return False
+            del self.exclusive_jobs[key]
         return True
 
     @contextmanager
